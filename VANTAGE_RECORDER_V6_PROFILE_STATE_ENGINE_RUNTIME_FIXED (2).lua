@@ -585,6 +585,16 @@ local function CaptureCurrentProfile()
         end
     end
 
+    if VantageProfileBridge.GetAutoCombatState then
+        local okCombat, combatState = pcall(VantageProfileBridge.GetAutoCombatState)
+        if okCombat and type(combatState) == "table" then
+            profile.AutoCombatEnabled = combatState.Enabled == true
+            profile.AutoCombatRange = tonumber(combatState.Range) or 180
+            profile.AutoCombatAttackDistance = tonumber(combatState.AttackDistance) or 90
+            profile.AutoCombatTargetPart = combatState.TargetPart or "Head"
+        end
+    end
+
     return profile
 end
 
@@ -1838,6 +1848,17 @@ ApplyProfile = function(name)
         end
     end
 
+    if VantageProfileBridge.ApplyAutoCombatState then
+        pcall(function()
+            VantageProfileBridge.ApplyAutoCombatState({
+                Enabled = profile.AutoCombatEnabled == true,
+                Range = tonumber(profile.AutoCombatRange),
+                AttackDistance = tonumber(profile.AutoCombatAttackDistance),
+                TargetPart = profile.AutoCombatTargetPart,
+            })
+        end)
+    end
+
     activeProfileName = name
     SaveActiveProfileName(name)
 
@@ -1929,18 +1950,20 @@ ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 local TweenService = game:GetService("TweenService")
 
 local T = {
-    Black = Color3.fromRGB(4, 7, 12),
-    Navy = Color3.fromRGB(7, 14, 25),
-    Navy2 = Color3.fromRGB(10, 20, 35),
-    Surface = Color3.fromRGB(12, 23, 39),
-    Surface2 = Color3.fromRGB(15, 28, 47),
-    Border = Color3.fromRGB(30, 52, 78),
-    Blue = Color3.fromRGB(62, 142, 230),
-    BlueSoft = Color3.fromRGB(103, 169, 238),
-    Text = Color3.fromRGB(235, 241, 248),
-    Muted = Color3.fromRGB(121, 139, 160),
-    Green = Color3.fromRGB(69, 198, 142),
-    Red = Color3.fromRGB(220, 76, 88),
+    Black = Color3.fromRGB(5, 5, 9),
+    Navy = Color3.fromRGB(10, 9, 17),
+    Navy2 = Color3.fromRGB(15, 12, 26),
+    Surface = Color3.fromRGB(18, 14, 31),
+    Surface2 = Color3.fromRGB(24, 18, 42),
+    Border = Color3.fromRGB(63, 45, 96),
+    Blue = Color3.fromRGB(145, 82, 255),
+    BlueSoft = Color3.fromRGB(181, 126, 255),
+    Purple = Color3.fromRGB(145, 82, 255),
+    PurpleSoft = Color3.fromRGB(190, 142, 255),
+    Text = Color3.fromRGB(244, 241, 250),
+    Muted = Color3.fromRGB(151, 145, 169),
+    Green = Color3.fromRGB(81, 218, 154),
+    Red = Color3.fromRGB(237, 88, 112),
 }
 
 local function Corner(obj, r)
@@ -1993,13 +2016,13 @@ MainMenu.BorderSizePixel = 0
 MainMenu.Visible = true
 MainMenu.Parent = ScreenGui
 Corner(MainMenu, 14)
-Stroke(MainMenu, Color3.fromRGB(25, 47, 72), 0.05)
+Stroke(MainMenu, Color3.fromRGB(79, 48, 121), 0.05)
 
 local ShellGradient = Instance.new("UIGradient")
 ShellGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(3, 6, 11)),
-    ColorSequenceKeypoint.new(0.58, Color3.fromRGB(6, 13, 23)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 17, 29))
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(4, 4, 8)),
+    ColorSequenceKeypoint.new(0.58, Color3.fromRGB(10, 7, 17)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 10, 29))
 })
 ShellGradient.Rotation = 12
 ShellGradient.Parent = MainMenu
@@ -2007,7 +2030,7 @@ ShellGradient.Parent = MainMenu
 -- Header
 local Header = Instance.new("Frame")
 Header.Size = UDim2.new(1, 0, 0, 70)
-Header.BackgroundColor3 = Color3.fromRGB(6, 12, 21)
+Header.BackgroundColor3 = Color3.fromRGB(9, 7, 15)
 Header.BorderSizePixel = 0
 Header.Parent = MainMenu
 Corner(Header, 14)
@@ -2024,9 +2047,8 @@ Stroke(LogoBox, T.Border, 0)
 local Logo = Text(LogoBox, "V", UDim2.new(1,0,1,0), UDim2.new(), Enum.Font.GothamBlack, 20, T.BlueSoft, Enum.TextXAlignment.Center)
 
 local Brand = Text(Header, "VANTAGE", UDim2.new(0, 210, 0, 24), UDim2.new(0, 70, 0, 13), Enum.Font.GothamBold, 17, T.Text)
-local Sub = Text(Header, "RECORDER CONTROL", UDim2.new(0, 210, 0, 18), UDim2.new(0, 70, 0, 36), Enum.Font.GothamMedium, 9, T.Muted)
+local Sub = Text(Header, "ULTIMATE GAME ENHANCER", UDim2.new(0, 210, 0, 18), UDim2.new(0, 70, 0, 36), Enum.Font.GothamMedium, 9, T.Muted)
 
-local Dev = Text(Header, "Developer: z6b", UDim2.new(0, 145, 0, 22), UDim2.new(1, -240, 0, 24), Enum.Font.GothamMedium, 10, Color3.fromRGB(147, 165, 186), Enum.TextXAlignment.Right)
 
 local MinBtn = Instance.new("TextButton")
 MinBtn.Size = UDim2.new(0, 32, 0, 32)
@@ -2102,13 +2124,13 @@ StopBtn = ActionButton("StopButton", 0, 114, 296, 76, "■", "STOP PLAYBACK", "S
 ListBtn = ActionButton("LibraryButton", 306, 114, 296, 76, "≡", "RECORDINGS", "Open recording library", Color3.fromRGB(91, 137, 184))
 
 LocationsBtn = ActionButton("LocationsButton", 0, 200, 296, 64, "⌖", "LOCATIONS", "F10 save • teleport • loop", Color3.fromRGB(78, 132, 185))
-MovementBtn = ActionButton("MovementButton", 306, 200, 296, 64, "»", "MOVEMENT", "Speed • anti-fall • auto return", Color3.fromRGB(75, 146, 205))
+MovementBtn = ActionButton("MovementButton", 306, 200, 296, 64, "»", "MOVEMENT", "Speed • anti-fall • auto return", Color3.fromRGB(128, 83, 214))
 
-PlayersBtn = ActionButton("PlayersButton", 0, 274, 194, 64, "◎", "PLAYER LIST", "Players and spectate", Color3.fromRGB(70, 129, 190))
-ESPMainBtn = ActionButton("ESPButton", 204, 274, 194, 64, "◇", "ESP: OFF", "Wall skeleton ESP", Color3.fromRGB(92, 181, 255))
+PlayersBtn = ActionButton("PlayersButton", 0, 274, 194, 64, "◎", "PLAYER LIST", "Players and spectate", Color3.fromRGB(117, 76, 198))
+ESPMainBtn = ActionButton("ESPButton", 204, 274, 194, 64, "◇", "ESP: OFF", "Wall skeleton ESP", Color3.fromRGB(166, 105, 255))
 ESPColorBtn = ActionButton("ESPColorButton", 408, 274, 194, 64, "◈", "ESP COLOR", "Choose custom RGB", espColor)
 
-ProfilesBtn = ActionButton("ProfilesButton", 0, 348, 602, 54, "▣", "PROFILES", "Save and restore your VANTAGE setup", Color3.fromRGB(111, 151, 205))
+ProfilesBtn = ActionButton("ProfilesButton", 0, 348, 602, 54, "▣", "PROFILES", "Save and restore your VANTAGE setup", Color3.fromRGB(137, 91, 218))
 
 -- Wide exit row
 CloseBtn = Instance.new("TextButton")
@@ -3970,7 +3992,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     local AimSettingsBtn = ActionButton(
         "AimSettingsButton", 306, 348, 296, 54,
         "◌", "AIM SETTINGS", "FOV • lock strength • target",
-        Color3.fromRGB(132, 121, 225)
+        Color3.fromRGB(157, 92, 244)
     )
 
     -- Dedicated overlay prevents GUI inset from shifting the FOV.
@@ -4386,6 +4408,794 @@ if not AimModuleLoaded then
     warn("VANTAGE AIM V2 FAILED: " .. tostring(AimModuleError))
     warn("Main VANTAGE menu remains available.")
 end
+
+-- ============================================
+-- VANTAGE AUTO COMBAT
+-- Generic Tool-based autopilot; no anti-cheat bypass.
+-- ============================================
+local AutoCombatLoaded, AutoCombatError = pcall(function()
+    local autoCombatEnabled = false
+    local autoCombatRange = 180
+    local autoCombatAttackDistance = 90
+    local autoCombatTargetPart = "Head"
+    local autoCombatTarget = nil
+    local autoCombatThinkConnection = nil
+    local autoCombatElapsed = 0
+    local autoCombatLastAttack = 0
+    local autoCombatRenderBound = false
+    local AUTO_COMBAT_BIND = "VantageAutoCombatAim"
+
+    local function IsEnemy(player)
+        if not player or player == LocalPlayer then return false end
+        if LocalPlayer.Team ~= nil and player.Team ~= nil and LocalPlayer.Team == player.Team then
+            return false
+        end
+
+        local character = player.Character
+        if not character or not character.Parent then return false end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not root or humanoid.Health <= 0 then return false end
+
+        return humanoid:GetState() ~= Enum.HumanoidStateType.Dead
+    end
+
+    local function GetCombatPart(player)
+        if not IsEnemy(player) then return nil end
+        local character = player.Character
+        return character:FindFirstChild(autoCombatTargetPart)
+            or character:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function DistanceTo(player)
+        local myRoot = GetRoot()
+        local targetRoot = player and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not targetRoot then return math.huge end
+        return (myRoot.Position - targetRoot.Position).Magnitude
+    end
+
+    local function FindBestCombatTarget()
+        local camera = workspace.CurrentCamera
+        if not camera then return nil end
+
+        local viewport = camera.ViewportSize
+        local center = Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
+        local bestPlayer, bestScore = nil, math.huge
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if IsEnemy(player) then
+                local part = GetCombatPart(player)
+                local worldDistance = DistanceTo(player)
+
+                if part and worldDistance <= autoCombatRange then
+                    local point, visible = camera:WorldToViewportPoint(part.Position)
+                    local screenPenalty = 5000
+
+                    if visible and point.Z > 0 then
+                        screenPenalty = (Vector2.new(point.X, point.Y) - center).Magnitude
+                    end
+
+                    local score = screenPenalty + worldDistance * 0.35
+                    if score < bestScore then
+                        bestScore = score
+                        bestPlayer = player
+                    end
+                end
+            end
+        end
+
+        return bestPlayer
+    end
+
+    local function GetUsableTool()
+        local character = LocalPlayer.Character
+        local humanoid = GetHumanoid()
+        if not character or not humanoid then return nil end
+
+        -- Prefer an already-equipped Tool.
+        local equipped = character:FindFirstChildOfClass("Tool")
+        if equipped then
+            return equipped
+        end
+
+        -- Otherwise equip the first enabled Tool from Backpack.
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if not backpack then return nil end
+
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                local canUse = true
+                pcall(function()
+                    if item.Enabled == false then
+                        canUse = false
+                    end
+                end)
+
+                if canUse then
+                    pcall(function()
+                        humanoid:EquipTool(item)
+                    end)
+
+                    -- EquipTool reparents the Tool to Character.
+                    if item.Parent == character then
+                        return item
+                    end
+                end
+            end
+        end
+
+        return character:FindFirstChildOfClass("Tool")
+    end
+
+    local function MoveTowardTarget()
+        if not autoCombatTarget or not IsEnemy(autoCombatTarget) then return end
+
+        local humanoid = GetHumanoid()
+        local targetRoot = autoCombatTarget.Character
+            and autoCombatTarget.Character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not targetRoot then return end
+
+        local distance = DistanceTo(autoCombatTarget)
+        if distance > math.max(10, autoCombatAttackDistance * 0.72) then
+            humanoid:MoveTo(targetRoot.Position)
+        else
+            humanoid:Move(Vector3.zero, false)
+        end
+    end
+
+    local function AttackCurrentTarget()
+        if not autoCombatTarget or not IsEnemy(autoCombatTarget) then return end
+        if DistanceTo(autoCombatTarget) > autoCombatAttackDistance then return end
+
+        local now = os.clock()
+        if now - autoCombatLastAttack < 0.07 then return end
+        autoCombatLastAttack = now
+
+        local tool = GetUsableTool()
+        if not tool then return end
+
+        -- Standard Roblox Tool fire path.
+        -- Activate repeatedly while the target is valid, then release shortly after.
+        pcall(function()
+            if tool.Enabled == false then
+                return
+            end
+
+            tool:Activate()
+
+            task.delay(0.035, function()
+                if tool and tool.Parent then
+                    pcall(function()
+                        tool:Deactivate()
+                    end)
+                end
+            end)
+        end)
+    end
+
+    local function CombatAimStep()
+        if not autoCombatEnabled then return end
+
+        if not autoCombatTarget
+            or not IsEnemy(autoCombatTarget)
+            or DistanceTo(autoCombatTarget) > autoCombatRange then
+            autoCombatTarget = FindBestCombatTarget()
+        end
+
+        local part = autoCombatTarget and GetCombatPart(autoCombatTarget)
+        local camera = workspace.CurrentCamera
+        if part and camera then
+            local pos = camera.CFrame.Position
+            camera.CFrame = CFrame.new(pos, part.Position)
+        end
+    end
+
+    local function StopAutoCombatLoop()
+        if autoCombatThinkConnection then
+            autoCombatThinkConnection:Disconnect()
+            autoCombatThinkConnection = nil
+        end
+
+        if autoCombatRenderBound then
+            pcall(function() RunService:UnbindFromRenderStep(AUTO_COMBAT_BIND) end)
+            autoCombatRenderBound = false
+        end
+
+        autoCombatTarget = nil
+
+        local character = LocalPlayer.Character
+        local equipped = character and character:FindFirstChildOfClass("Tool")
+        if equipped then
+            pcall(function()
+                equipped:Deactivate()
+            end)
+        end
+
+        local humanoid = GetHumanoid()
+        if humanoid then
+            pcall(function() humanoid:Move(Vector3.zero, false) end)
+        end
+    end
+
+    local function StartAutoCombatLoop()
+        StopAutoCombatLoop()
+        autoCombatElapsed = 0
+
+        autoCombatThinkConnection = RunService.Heartbeat:Connect(function(dt)
+            if not autoCombatEnabled then return end
+
+            autoCombatElapsed += dt
+            if autoCombatElapsed < 0.08 then return end
+            autoCombatElapsed = 0
+
+            if not autoCombatTarget
+                or not IsEnemy(autoCombatTarget)
+                or DistanceTo(autoCombatTarget) > autoCombatRange then
+                autoCombatTarget = FindBestCombatTarget()
+            end
+
+            MoveTowardTarget()
+            AttackCurrentTarget()
+        end)
+
+        RunService:BindToRenderStep(
+            AUTO_COMBAT_BIND,
+            Enum.RenderPriority.Camera.Value + 2,
+            CombatAimStep
+        )
+        autoCombatRenderBound = true
+    end
+
+    local function SetAutoCombatEnabled(state)
+        autoCombatEnabled = state == true
+
+        if autoCombatEnabled then
+            pcall(function() SetESPEnabled(true) end)
+
+            if VantageProfileBridge.ApplyAimState then
+                pcall(function()
+                    VantageProfileBridge.ApplyAimState({
+                        Enabled = true,
+                        FOV = 200,
+                        Smoothness = 1,
+                        TargetPart = autoCombatTargetPart,
+                    })
+                end)
+            end
+
+            StartAutoCombatLoop()
+        else
+            StopAutoCombatLoop()
+        end
+    end
+
+    local AutoCombatBtn = nil
+
+    if MainMenu and ActionButton then
+        MainMenu.Size = UDim2.new(0, 650, 0, 760)
+
+        if ProfilesBtn and ProfilesBtn.Parent then
+            ProfilesBtn.Position = UDim2.new(0, 0, 0, 476)
+        end
+
+        if CloseBtn and CloseBtn.Parent then
+            CloseBtn.Position = UDim2.new(0, 0, 0, 540)
+        end
+
+        AutoCombatBtn = ActionButton(
+            "AutoCombatButton", 0, 412, 602, 54,
+            "⚔", "AUTO COMBAT: OFF", "Auto target • move • Tool attack",
+            Color3.fromRGB(230, 105, 85)
+        )
+
+        local function RefreshAutoCombatButton()
+            if not AutoCombatBtn then return end
+            for _, obj in ipairs(AutoCombatBtn:GetChildren()) do
+                if obj:IsA("TextLabel")
+                    and (obj.Text == "AUTO COMBAT: OFF" or obj.Text == "AUTO COMBAT: ON") then
+                    obj.Text = autoCombatEnabled and "AUTO COMBAT: ON" or "AUTO COMBAT: OFF"
+                    obj.TextColor3 = autoCombatEnabled and T.Green or T.Text
+                end
+            end
+        end
+
+        AutoCombatBtn.MouseButton1Click:Connect(function()
+            local ok, err = pcall(function()
+                SetAutoCombatEnabled(not autoCombatEnabled)
+                RefreshAutoCombatButton()
+            end)
+            if not ok then
+                warn("VANTAGE AUTO COMBAT ERROR: " .. tostring(err))
+            end
+        end)
+
+        VantageProfileBridge.RefreshAutoCombatUI = RefreshAutoCombatButton
+    end
+
+    VantageProfileBridge.GetAutoCombatState = function()
+        return {
+            Enabled = autoCombatEnabled == true,
+            Range = autoCombatRange,
+            AttackDistance = autoCombatAttackDistance,
+            TargetPart = autoCombatTargetPart,
+        }
+    end
+
+    VantageProfileBridge.ApplyAutoCombatState = function(state)
+        if type(state) ~= "table" then return end
+
+        if tonumber(state.Range) then
+            autoCombatRange = math.clamp(tonumber(state.Range), 30, 500)
+        end
+
+        if tonumber(state.AttackDistance) then
+            autoCombatAttackDistance = math.clamp(
+                tonumber(state.AttackDistance),
+                8,
+                autoCombatRange
+            )
+        end
+
+        if state.TargetPart == "Head" or state.TargetPart == "HumanoidRootPart" then
+            autoCombatTargetPart = state.TargetPart
+        end
+
+        SetAutoCombatEnabled(state.Enabled == true)
+
+        if VantageProfileBridge.RefreshAutoCombatUI then
+            pcall(VantageProfileBridge.RefreshAutoCombatUI)
+        end
+    end
+
+    ScreenGui.AncestryChanged:Connect(function(_, parent)
+        if parent == nil then
+            StopAutoCombatLoop()
+        end
+    end)
+
+    print("VANTAGE AUTO COMBAT: LOADED")
+end)
+
+if not AutoCombatLoaded then
+    warn("VANTAGE AUTO COMBAT FAILED: " .. tostring(AutoCombatError))
+end
+
+
+-- ============================================
+-- VANTAGE DEVELOPER PAGE
+-- Premium purple creator profile
+-- ============================================
+local VantageDeveloperLoaded, VantageDeveloperError = pcall(function()
+    local DEVELOPER_NAME = "AB"
+    local DEVELOPER_DISCORD = "z6b"
+    local DEVELOPER_INVITE = "https://discord.gg/DdybHKbs5m"
+    local DEVELOPER_IMAGE_URL = "https://raw.githubusercontent.com/zfaaaaaaaa/Vantage-z6b/refs/heads/main/vantage_developer_ab.png"
+    local DEVELOPER_IMAGE_FOLDER = "VantageDeveloper"
+    local DEVELOPER_IMAGE_FILE = DEVELOPER_IMAGE_FOLDER .. "/developer_ab.png"
+
+    local function MakeGradient(parent, c1, c2, rotation)
+        local g = Instance.new("UIGradient")
+        g.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, c1),
+            ColorSequenceKeypoint.new(1, c2),
+        })
+        g.Rotation = rotation or 0
+        g.Parent = parent
+        return g
+    end
+
+    local function TryCopy(value)
+        local copied = false
+
+        if setclipboard then
+            copied = pcall(function()
+                setclipboard(value)
+            end)
+        elseif toclipboard then
+            copied = pcall(function()
+                toclipboard(value)
+            end)
+        end
+
+        return copied
+    end
+
+    local function ResolveDeveloperImage()
+        local customAsset = getcustomasset or getsynasset
+        if not customAsset then
+            return nil
+        end
+
+        local ok = pcall(function()
+            if makefolder and isfolder and not isfolder(DEVELOPER_IMAGE_FOLDER) then
+                makefolder(DEVELOPER_IMAGE_FOLDER)
+            end
+
+            local needsDownload = true
+            if isfile then
+                needsDownload = not isfile(DEVELOPER_IMAGE_FILE)
+            end
+
+            if needsDownload and writefile then
+                local body = game:HttpGet(DEVELOPER_IMAGE_URL)
+                if body and #body > 100 then
+                    writefile(DEVELOPER_IMAGE_FILE, body)
+                end
+            end
+        end)
+
+        if not ok then
+            return nil
+        end
+
+        local success, asset = pcall(function()
+            return customAsset(DEVELOPER_IMAGE_FILE)
+        end)
+
+        if success then
+            return asset
+        end
+
+        return nil
+    end
+
+    -- Final main-menu spacing after AIM + AUTO COMBAT have already initialized.
+    MainMenu.Size = UDim2.new(0, 650, 0, 825)
+
+    if ProfilesBtn and ProfilesBtn.Parent then
+        ProfilesBtn.Position = UDim2.new(0, 0, 0, 476)
+    end
+
+    local DeveloperBtn = ActionButton(
+        "DeveloperButton", 0, 540, 602, 54,
+        "♛", "DEVELOPER", "Creator profile • Discord • VANTAGE",
+        T.PurpleSoft
+    )
+
+    if CloseBtn and CloseBtn.Parent then
+        CloseBtn.Position = UDim2.new(0, 0, 0, 604)
+    end
+
+    -- Developer page shell
+    local DeveloperFrame = Instance.new("Frame")
+    DeveloperFrame.Name = "DeveloperFrame"
+    DeveloperFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+    DeveloperFrame.Size = UDim2.new(0, 780, 0, 590)
+    DeveloperFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+    DeveloperFrame.BackgroundColor3 = Color3.fromRGB(5, 5, 9)
+    DeveloperFrame.BorderSizePixel = 0
+    DeveloperFrame.Visible = false
+    DeveloperFrame.Parent = ScreenGui
+    Corner(DeveloperFrame, 18)
+    Stroke(DeveloperFrame, Color3.fromRGB(93, 53, 143), 0.05)
+
+    MakeGradient(
+        DeveloperFrame,
+        Color3.fromRGB(5, 5, 9),
+        Color3.fromRGB(20, 10, 31),
+        14
+    )
+
+    -- Subtle top accent
+    local TopAccent = Instance.new("Frame")
+    TopAccent.Size = UDim2.new(1, -44, 0, 2)
+    TopAccent.Position = UDim2.new(0, 22, 0, 74)
+    TopAccent.BackgroundColor3 = T.Purple
+    TopAccent.BorderSizePixel = 0
+    TopAccent.Parent = DeveloperFrame
+    Corner(TopAccent, 2)
+    MakeGradient(
+        TopAccent,
+        Color3.fromRGB(75, 42, 125),
+        Color3.fromRGB(192, 113, 255),
+        0
+    )
+
+    -- Header
+    local DevLogoBox = Instance.new("Frame")
+    DevLogoBox.Size = UDim2.new(0, 42, 0, 42)
+    DevLogoBox.Position = UDim2.new(0, 24, 0, 18)
+    DevLogoBox.BackgroundColor3 = Color3.fromRGB(22, 14, 37)
+    DevLogoBox.BorderSizePixel = 0
+    DevLogoBox.Parent = DeveloperFrame
+    Corner(DevLogoBox, 21)
+    Stroke(DevLogoBox, T.Purple, 0.1)
+
+    Text(
+        DevLogoBox, "♙",
+        UDim2.new(1, 0, 1, 0), UDim2.new(),
+        Enum.Font.GothamBold, 22, T.PurpleSoft,
+        Enum.TextXAlignment.Center
+    )
+
+    Text(
+        DeveloperFrame, "DEVELOPER",
+        UDim2.new(0, 250, 0, 26), UDim2.new(0, 80, 0, 15),
+        Enum.Font.GothamBlack, 21, T.PurpleSoft
+    )
+
+    Text(
+        DeveloperFrame, "ABOUT THE CREATOR",
+        UDim2.new(0, 250, 0, 18), UDim2.new(0, 80, 0, 41),
+        Enum.Font.GothamMedium, 10, T.Muted
+    )
+
+    local DevClose = Instance.new("TextButton")
+    DevClose.Size = UDim2.new(0, 36, 0, 36)
+    DevClose.Position = UDim2.new(1, -56, 0, 20)
+    DevClose.BackgroundColor3 = Color3.fromRGB(13, 10, 22)
+    DevClose.BorderSizePixel = 0
+    DevClose.Text = "×"
+    DevClose.TextColor3 = T.Muted
+    DevClose.TextSize = 20
+    DevClose.Font = Enum.Font.Gotham
+    DevClose.AutoButtonColor = false
+    DevClose.Parent = DeveloperFrame
+    Corner(DevClose, 9)
+    Stroke(DevClose, T.Border, 0.2)
+    Hover(DevClose, Color3.fromRGB(13, 10, 22), Color3.fromRGB(29, 17, 43))
+
+    -- Left creator card
+    local CreatorCard = Instance.new("Frame")
+    CreatorCard.Size = UDim2.new(0, 300, 0, 415)
+    CreatorCard.Position = UDim2.new(0, 24, 0, 94)
+    CreatorCard.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
+    CreatorCard.BorderSizePixel = 0
+    CreatorCard.Parent = DeveloperFrame
+    Corner(CreatorCard, 16)
+    Stroke(CreatorCard, Color3.fromRGB(78, 48, 118), 0.08)
+
+    local PortraitRing = Instance.new("Frame")
+    PortraitRing.Size = UDim2.new(0, 230, 0, 230)
+    PortraitRing.Position = UDim2.new(0.5, -115, 0, 24)
+    PortraitRing.BackgroundColor3 = Color3.fromRGB(23, 15, 36)
+    PortraitRing.BorderSizePixel = 0
+    PortraitRing.Parent = CreatorCard
+    Corner(PortraitRing, 115)
+    local portraitStroke = Stroke(PortraitRing, T.Purple, 0.03)
+    portraitStroke.Thickness = 2
+
+    local Portrait = Instance.new("ImageLabel")
+    Portrait.Size = UDim2.new(1, -10, 1, -10)
+    Portrait.Position = UDim2.new(0, 5, 0, 5)
+    Portrait.BackgroundColor3 = Color3.fromRGB(16, 13, 23)
+    Portrait.BorderSizePixel = 0
+    Portrait.ScaleType = Enum.ScaleType.Crop
+    Portrait.Image = ""
+    Portrait.Parent = PortraitRing
+    Corner(Portrait, 110)
+
+    local PortraitFallback = Text(
+        Portrait, "AB",
+        UDim2.new(1, 0, 1, 0), UDim2.new(),
+        Enum.Font.GothamBlack, 56, T.PurpleSoft,
+        Enum.TextXAlignment.Center
+    )
+
+    task.spawn(function()
+        local asset = ResolveDeveloperImage()
+        if asset and Portrait.Parent then
+            Portrait.Image = asset
+            PortraitFallback.Visible = false
+        end
+    end)
+
+    Text(
+        CreatorCard, "AB",
+        UDim2.new(1, -30, 0, 44), UDim2.new(0, 15, 0, 270),
+        Enum.Font.GothamBlack, 38, T.Text,
+        Enum.TextXAlignment.Center
+    )
+
+    Text(
+        CreatorCard, "DEVELOPER & CREATOR",
+        UDim2.new(1, -30, 0, 20), UDim2.new(0, 15, 0, 314),
+        Enum.Font.GothamBold, 11, T.PurpleSoft,
+        Enum.TextXAlignment.Center
+    )
+
+    local Signature = Text(
+        CreatorCard, "A B",
+        UDim2.new(1, -30, 0, 54), UDim2.new(0, 15, 0, 340),
+        Enum.Font.GothamBlack, 31, T.Purple,
+        Enum.TextXAlignment.Center
+    )
+    Signature.TextTransparency = 0.04
+
+    -- Right profile
+    local Right = Instance.new("Frame")
+    Right.Size = UDim2.new(0, 416, 0, 415)
+    Right.Position = UDim2.new(0, 340, 0, 94)
+    Right.BackgroundTransparency = 1
+    Right.Parent = DeveloperFrame
+
+    Text(
+        Right, "AB",
+        UDim2.new(0, 240, 0, 48), UDim2.new(0, 0, 0, 4),
+        Enum.Font.GothamBlack, 40, T.Text
+    )
+
+    local Verified = Instance.new("Frame")
+    Verified.Size = UDim2.new(0, 28, 0, 28)
+    Verified.Position = UDim2.new(0, 73, 0, 13)
+    Verified.BackgroundColor3 = T.Purple
+    Verified.BorderSizePixel = 0
+    Verified.Rotation = 45
+    Verified.Parent = Right
+    Corner(Verified, 7)
+
+    local Check = Text(
+        Verified, "✓",
+        UDim2.new(1, 0, 1, 0), UDim2.new(),
+        Enum.Font.GothamBlack, 15, T.Text,
+        Enum.TextXAlignment.Center
+    )
+    Check.Rotation = -45
+
+    Text(
+        Right, "DEVELOPER & CREATOR",
+        UDim2.new(1, 0, 0, 20), UDim2.new(0, 0, 0, 54),
+        Enum.Font.GothamBold, 11, T.PurpleSoft
+    )
+
+    local QuoteCard = Instance.new("Frame")
+    QuoteCard.Size = UDim2.new(1, 0, 0, 100)
+    QuoteCard.Position = UDim2.new(0, 0, 0, 86)
+    QuoteCard.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
+    QuoteCard.BorderSizePixel = 0
+    QuoteCard.Parent = Right
+    Corner(QuoteCard, 13)
+    Stroke(QuoteCard, Color3.fromRGB(75, 48, 111), 0.28)
+
+    Text(
+        QuoteCard, "“",
+        UDim2.new(0, 34, 0, 38), UDim2.new(0, 15, 0, 8),
+        Enum.Font.GothamBlack, 31, T.PurpleSoft
+    )
+
+    local Quote = Text(
+        QuoteCard,
+        "Building VANTAGE for precision, control and performance.",
+        UDim2.new(1, -70, 0, 52), UDim2.new(0, 50, 0, 24),
+        Enum.Font.GothamMedium, 13, Color3.fromRGB(211, 206, 220)
+    )
+    Quote.TextWrapped = true
+
+    local function InfoRow(y, icon, label, value, buttonText, copyValue)
+        local Row = Instance.new("Frame")
+        Row.Size = UDim2.new(1, 0, 0, 61)
+        Row.Position = UDim2.new(0, 0, 0, y)
+        Row.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
+        Row.BorderSizePixel = 0
+        Row.Parent = Right
+        Corner(Row, 12)
+        Stroke(Row, Color3.fromRGB(70, 45, 103), 0.3)
+
+        local IconBox = Instance.new("Frame")
+        IconBox.Size = UDim2.new(0, 40, 0, 40)
+        IconBox.Position = UDim2.new(0, 10, 0.5, -20)
+        IconBox.BackgroundColor3 = Color3.fromRGB(29, 18, 47)
+        IconBox.BorderSizePixel = 0
+        IconBox.Parent = Row
+        Corner(IconBox, 9)
+        Stroke(IconBox, T.Purple, 0.25)
+
+        Text(
+            IconBox, icon,
+            UDim2.new(1, 0, 1, 0), UDim2.new(),
+            Enum.Font.GothamBold, 16, T.PurpleSoft,
+            Enum.TextXAlignment.Center
+        )
+
+        Text(
+            Row, label,
+            UDim2.new(0, 210, 0, 15), UDim2.new(0, 62, 0, 9),
+            Enum.Font.GothamMedium, 9, T.Muted
+        )
+
+        Text(
+            Row, value,
+            UDim2.new(0, 225, 0, 23), UDim2.new(0, 62, 0, 27),
+            Enum.Font.GothamBold, 13, T.Text
+        )
+
+        local CopyBtn = Instance.new("TextButton")
+        CopyBtn.Size = UDim2.new(0, 92, 0, 34)
+        CopyBtn.Position = UDim2.new(1, -102, 0.5, -17)
+        CopyBtn.BackgroundColor3 = Color3.fromRGB(27, 17, 43)
+        CopyBtn.BorderSizePixel = 0
+        CopyBtn.Text = buttonText
+        CopyBtn.TextColor3 = T.PurpleSoft
+        CopyBtn.TextSize = 11
+        CopyBtn.Font = Enum.Font.GothamBold
+        CopyBtn.AutoButtonColor = false
+        CopyBtn.Parent = Row
+        Corner(CopyBtn, 8)
+        Stroke(CopyBtn, T.Purple, 0.28)
+        Hover(CopyBtn, Color3.fromRGB(27, 17, 43), Color3.fromRGB(40, 24, 62))
+
+        CopyBtn.MouseButton1Click:Connect(function()
+            local original = CopyBtn.Text
+            local copied = TryCopy(copyValue)
+            CopyBtn.Text = copied and "COPIED" or "COPY"
+            task.delay(1.0, function()
+                if CopyBtn and CopyBtn.Parent then
+                    CopyBtn.Text = original
+                end
+            end)
+        end)
+    end
+
+    InfoRow(202, "◉", "DISCORD USERNAME", DEVELOPER_DISCORD, "COPY", DEVELOPER_DISCORD)
+    InfoRow(273, "↗", "DISCORD SERVER", "VANTAGE COMMUNITY", "INVITE", DEVELOPER_INVITE)
+    InfoRow(344, "∞", "SERVER INVITE", "discord.gg/DdybHKbs5m", "COPY", DEVELOPER_INVITE)
+
+    -- Bottom about card
+    local AboutCard = Instance.new("Frame")
+    AboutCard.Size = UDim2.new(1, -48, 0, 52)
+    AboutCard.Position = UDim2.new(0, 24, 1, -66)
+    AboutCard.BackgroundColor3 = Color3.fromRGB(11, 8, 18)
+    AboutCard.BorderSizePixel = 0
+    AboutCard.Parent = DeveloperFrame
+    Corner(AboutCard, 12)
+    Stroke(AboutCard, Color3.fromRGB(72, 46, 108), 0.25)
+
+    Text(
+        AboutCard, "♛",
+        UDim2.new(0, 40, 1, 0), UDim2.new(0, 12, 0, 0),
+        Enum.Font.GothamBlack, 20, T.PurpleSoft,
+        Enum.TextXAlignment.Center
+    )
+
+    Text(
+        AboutCard, "ABOUT VANTAGE",
+        UDim2.new(0, 160, 0, 19), UDim2.new(0, 59, 0, 8),
+        Enum.Font.GothamBold, 11, T.PurpleSoft
+    )
+
+    Text(
+        AboutCard, "Made for control • precision • performance",
+        UDim2.new(0, 360, 0, 17), UDim2.new(0, 59, 0, 27),
+        Enum.Font.Gotham, 10, T.Muted
+    )
+
+    local BackBtn = Instance.new("TextButton")
+    BackBtn.Size = UDim2.new(0, 118, 0, 34)
+    BackBtn.Position = UDim2.new(1, -132, 0.5, -17)
+    BackBtn.BackgroundColor3 = Color3.fromRGB(28, 17, 44)
+    BackBtn.BorderSizePixel = 0
+    BackBtn.Text = "←  BACK"
+    BackBtn.TextColor3 = T.PurpleSoft
+    BackBtn.TextSize = 11
+    BackBtn.Font = Enum.Font.GothamBold
+    BackBtn.AutoButtonColor = false
+    BackBtn.Parent = AboutCard
+    Corner(BackBtn, 8)
+    Stroke(BackBtn, T.Purple, 0.25)
+    Hover(BackBtn, Color3.fromRGB(28, 17, 44), Color3.fromRGB(43, 25, 65))
+
+    local function OpenDeveloperPage()
+        MainMenu.Visible = false
+        DeveloperFrame.Visible = true
+    end
+
+    local function CloseDeveloperPage()
+        DeveloperFrame.Visible = false
+        MainMenu.Visible = true
+    end
+
+    DeveloperBtn.MouseButton1Click:Connect(OpenDeveloperPage)
+    BackBtn.MouseButton1Click:Connect(CloseDeveloperPage)
+    DevClose.MouseButton1Click:Connect(CloseDeveloperPage)
+
+    print("VANTAGE DEVELOPER PAGE: LOADED")
+end)
+
+if not VantageDeveloperLoaded then
+    warn("VANTAGE DEVELOPER PAGE ERROR: " .. tostring(VantageDeveloperError))
+end
+
 
 task.defer(function()
     -- One deferred turn guarantees every GUI/module bridge above is ready.
