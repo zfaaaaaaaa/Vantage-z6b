@@ -102,6 +102,13 @@ local ESP_RECONCILE_INTERVAL = 0.20
 local espColor = Color3.fromRGB(90, 185, 255)
 local espColorPromptOpen = false
 
+-- BOT/NPC ESP state intentionally stored in one global table.
+-- This avoids adding top-level locals to this already-large Luau chunk.
+VantageBotRadar = VantageBotRadar or {
+    Objects = {},
+    Elapsed = 0,
+}
+
 
 local savedLocations = {}
 local loopTeleporting = false
@@ -1411,8 +1418,14 @@ local function SetLine(line, a, b, visible)
 end
 
 local function GetPartPoint(character, partName)
-    local part = character and character:FindFirstChild(partName)
-    return part and part.Position or nil
+    if not character then return nil end
+
+    local part = character:FindFirstChild(partName)
+    if not part then
+        part = character:FindFirstChild(partName, true)
+    end
+
+    return (part and part:IsA("BasePart")) and part.Position or nil
 end
 
 local function GetSkeletonSegments(character)
@@ -1493,19 +1506,24 @@ local function CreateESP(player)
         return
     end
 
-    RemoveESP(player)
-
     local character = player.Character
-    if not character then return end
+    if not character or not character.Parent then return end
 
-    local head = character:FindFirstChild("Head")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not head or not humanoid then return end
+    local root = character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("HumanoidRootPart", true)
+
+    if not humanoid or humanoid.Health <= 0 or not root then
+        return
+    end
 
     local segments = GetSkeletonSegments(character)
     if #segments == 0 then
         return
     end
+
+    -- Only remove the old ESP after the replacement character is valid.
+    RemoveESP(player)
 
     local lines = {}
 
@@ -1553,6 +1571,7 @@ local function CreateESP(player)
     nameTag.Parent = espGui
 
     espObjects[player] = {
+        Character = character,
         Lines = lines,
         Segments = segments,
         NameTag = nameTag,
@@ -1616,6 +1635,294 @@ local function StopESPUpdater()
     end
 end
 
+
+function VantageBotRadar.IsPlayerCharacter(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character == model then
+            return true
+        end
+    end
+
+    return false
+end
+
+function VantageBotRadar.Remove(model)
+    local data = VantageBotRadar.Objects[model]
+    if not data then return end
+
+    for _, line in ipairs(data.Lines or {}) do
+        pcall(function()
+            if line then
+                line:Destroy()
+            end
+        end)
+    end
+
+    if data.NameTag then
+        pcall(function()
+            data.NameTag:Destroy()
+        end)
+    end
+
+    VantageBotRadar.Objects[model] = nil
+end
+
+function VantageBotRadar.GetSegments(model)
+    local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return {} end
+
+    -- Reuse the exact same R6/R15 skeleton builder as players.
+    local segments = GetSkeletonSegments(model)
+    if #segments > 0 then
+        return segments
+    end
+
+    -- Simple/custom bot fallback.
+    local head = model:FindFirstChild("Head") or model:FindFirstChild("Head", true)
+    local root = model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("HumanoidRootPart", true)
+    local torso = model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("UpperTorso", true)
+        or model:FindFirstChild("Torso", true)
+
+    if head and torso then
+        return {{"Head", torso.Name}}
+    end
+
+    if head and root and head ~= root then
+        return {{"Head", root.Name}}
+    end
+
+    return {}
+end
+
+function VantageBotRadar.Create(model)
+    if not espEnabled
+        or not model
+        or not model:IsA("Model")
+        or not model.Parent
+        or VantageBotRadar.IsPlayerCharacter(model) then
+        return false
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("HumanoidRootPart", true)
+
+    if not humanoid or humanoid.Health <= 0 or not root then
+        return false
+    end
+
+    local segments = VantageBotRadar.GetSegments(model)
+    if #segments == 0 then
+        return false
+    end
+
+    VantageBotRadar.Remove(model)
+
+    local lines = {}
+    for _ = 1, #segments do
+        local line = NewESPLine()
+        if line then
+            table.insert(lines, line)
+        end
+    end
+
+    if #lines ~= #segments then
+        for _, line in ipairs(lines) do
+            pcall(function()
+                if line then line:Destroy() end
+            end)
+        end
+        return false
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local espGui = playerGui and playerGui:FindFirstChild("VantageRecorderUI")
+    if not espGui then
+        for _, line in ipairs(lines) do
+            pcall(function()
+                if line then line:Destroy() end
+            end)
+        end
+        return false
+    end
+
+    local tag = Instance.new("TextLabel")
+    tag.Name = "VantageBotESP_Name"
+    tag.AnchorPoint = Vector2.new(0.5, 1)
+    tag.Size = UDim2.new(0, 300, 0, 42)
+    tag.BackgroundTransparency = 1
+    tag.Text = ""
+    tag.TextColor3 = espColor:Lerp(Color3.new(1, 1, 1), 0.72)
+    tag.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    tag.TextStrokeTransparency = 0
+    tag.TextSize = 15
+    tag.Font = Enum.Font.GothamBold
+    tag.TextXAlignment = Enum.TextXAlignment.Center
+    tag.TextYAlignment = Enum.TextYAlignment.Center
+    tag.ZIndex = 81
+    tag.Visible = false
+    tag.Parent = espGui
+
+    VantageBotRadar.Objects[model] = {
+        Humanoid = humanoid,
+        Root = root,
+        Lines = lines,
+        Segments = segments,
+        NameTag = tag,
+    }
+
+    return true
+end
+
+function VantageBotRadar.Reconcile()
+    if not espEnabled then return end
+
+    local seen = {}
+
+    for _, descendant in ipairs(workspace:GetDescendants()) do
+        if descendant:IsA("Humanoid") then
+            local model = descendant.Parent
+
+            if model
+                and model:IsA("Model")
+                and descendant.Health > 0
+                and not VantageBotRadar.IsPlayerCharacter(model) then
+
+                local root = model:FindFirstChild("HumanoidRootPart")
+                    or model:FindFirstChild("HumanoidRootPart", true)
+
+                if root then
+                    seen[model] = true
+
+                    local data = VantageBotRadar.Objects[model]
+                    if not data
+                        or data.Humanoid ~= descendant
+                        or data.Root ~= root
+                        or not data.NameTag
+                        or not data.NameTag.Parent then
+                        VantageBotRadar.Create(model)
+                    end
+                end
+            end
+        end
+    end
+
+    local stale = {}
+    for model, data in pairs(VantageBotRadar.Objects) do
+        if not seen[model]
+            or not model
+            or not model.Parent
+            or not data.Humanoid
+            or data.Humanoid.Health <= 0 then
+            table.insert(stale, model)
+        end
+    end
+
+    for _, model in ipairs(stale) do
+        VantageBotRadar.Remove(model)
+    end
+end
+
+function VantageBotRadar.Update(camera, myRoot)
+    local stale = {}
+
+    for model, data in pairs(VantageBotRadar.Objects) do
+        local humanoid = data.Humanoid
+        local root = data.Root
+
+        if not model
+            or not model.Parent
+            or not humanoid
+            or humanoid.Health <= 0
+            or not root
+            or not root.Parent then
+            table.insert(stale, model)
+        else
+            for index, segment in ipairs(data.Segments or {}) do
+                local aWorld = GetPartPoint(model, segment[1])
+                local bWorld = GetPartPoint(model, segment[2])
+                local line = data.Lines[index]
+
+                if aWorld and bWorld and line then
+                    local aScreen = camera:WorldToScreenPoint(aWorld)
+                    local bScreen = camera:WorldToScreenPoint(bWorld)
+
+                    SetLine(
+                        line,
+                        Vector2.new(aScreen.X, aScreen.Y),
+                        Vector2.new(bScreen.X, bScreen.Y),
+                        aScreen.Z > 0 and bScreen.Z > 0
+                    )
+                elseif line then
+                    line.Visible = false
+                end
+            end
+
+            local labelPart = model:FindFirstChild("Head")
+                or model:FindFirstChild("Head", true)
+                or model:FindFirstChild("UpperTorso")
+                or model:FindFirstChild("Torso")
+                or root
+
+            if labelPart and data.NameTag then
+                local offset = (labelPart.Name == "Head") and 0.8 or 2.5
+                local screen = camera:WorldToScreenPoint(
+                    labelPart.Position + Vector3.new(0, offset, 0)
+                )
+
+                if screen.Z > 0 then
+                    local meters = 0
+                    if myRoot then
+                        meters = (myRoot.Position - root.Position).Magnitude * STUD_TO_METER
+                    end
+
+                    local botName = humanoid.DisplayName
+                    if not botName or botName == "" then
+                        botName = model.Name
+                    end
+                    if not botName or botName == "" then
+                        botName = "BOT"
+                    end
+
+                    data.NameTag.Position = UDim2.new(0, screen.X, 0, screen.Y - 8)
+                    data.NameTag.Text = string.format(
+                        "[BOT] %s  •  %.1f m",
+                        botName,
+                        meters
+                    )
+                    data.NameTag.Visible = true
+                else
+                    data.NameTag.Visible = false
+                end
+            end
+        end
+    end
+
+    for _, model in ipairs(stale) do
+        VantageBotRadar.Remove(model)
+    end
+end
+
+function VantageBotRadar.Clear()
+    local models = {}
+    for model in pairs(VantageBotRadar.Objects) do
+        table.insert(models, model)
+    end
+
+    for _, model in ipairs(models) do
+        VantageBotRadar.Remove(model)
+    end
+
+    VantageBotRadar.Elapsed = 0
+end
+
 local function StartESPUpdater()
     StopESPUpdater()
 
@@ -1631,6 +1938,14 @@ local function StartESPUpdater()
         local myRoot = GetRoot()
         if not camera then return end
 
+        -- BOT/NPC ESP runs inside this SAME updater.
+        VantageBotRadar.Elapsed += dt
+        if VantageBotRadar.Elapsed >= 0.25 then
+            VantageBotRadar.Elapsed = 0
+            VantageBotRadar.Reconcile()
+        end
+        VantageBotRadar.Update(camera, myRoot)
+
         -- Reconcile missing ESP entries inside the same updater.
         -- This fixes players whose character/rig was only partially loaded
         -- when CharacterAdded first fired, without adding another permanent loop.
@@ -1639,20 +1954,41 @@ local function StartESPUpdater()
             espReconcileElapsed = 0
 
             for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and not espObjects[player] then
+                if player ~= LocalPlayer then
                     local character = player.Character
                     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-                    local head = character and character:FindFirstChild("Head")
-                    local root = character and character:FindFirstChild("HumanoidRootPart")
+                    local root = character and (
+                        character:FindFirstChild("HumanoidRootPart")
+                        or character:FindFirstChild("HumanoidRootPart", true)
+                    )
+                    local data = espObjects[player]
 
                     if character
                         and character.Parent
                         and humanoid
-                        and head
                         and root
                         and humanoid.Health > 0
                         and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
-                        CreateESP(player)
+
+                        local needsESP = not data
+                            or data.Character ~= character
+                            or not data.NameTag
+                            or not data.NameTag.Parent
+
+                        if not needsESP and data.Lines then
+                            for _, line in ipairs(data.Lines) do
+                                if not line or not line.Parent then
+                                    needsESP = true
+                                    break
+                                end
+                            end
+                        end
+
+                        if needsESP then
+                            CreateESP(player)
+                        end
+                    elseif data then
+                        RemoveESP(player)
                     end
                 end
             end
@@ -1664,13 +2000,19 @@ local function StartESPUpdater()
         for player, data in pairs(espObjects) do
             local character = player.Character
             local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-            local root = character and character:FindFirstChild("HumanoidRootPart")
-            local head = character and character:FindFirstChild("Head")
+            local root = character and (
+                character:FindFirstChild("HumanoidRootPart")
+                or character:FindFirstChild("HumanoidRootPart", true)
+            )
+            local head = character and (
+                character:FindFirstChild("Head")
+                or character:FindFirstChild("Head", true)
+            )
 
             if not character
+                or data.Character ~= character
                 or not humanoid
                 or not root
-                or not head
                 or not character.Parent
                 or humanoid.Health <= 0
                 or humanoid:GetState() == Enum.HumanoidStateType.Dead then
@@ -1702,22 +2044,33 @@ local function StartESPUpdater()
                         end
                     end
 
-                    local headScreen = camera:WorldToScreenPoint(head.Position + Vector3.new(0, 0.8, 0))
-                    if headScreen.Z > 0 then
-                        local meters = 0
-                        if myRoot then
-                            meters = (myRoot.Position - root.Position).Magnitude * STUD_TO_METER
-                        end
+                    local labelPart = head
+                        or character:FindFirstChild("UpperTorso")
+                        or character:FindFirstChild("Torso")
+                        or root
 
-                        data.NameTag.Position = UDim2.new(0, headScreen.X, 0, headScreen.Y - 8)
-                        data.NameTag.Text = string.format(
-                            "%s  •  %.1f m",
-                            player.DisplayName,
-                            meters
+                    if labelPart and data.NameTag then
+                        local yOffset = (labelPart == head) and 0.8 or 2.5
+                        local headScreen = camera:WorldToScreenPoint(
+                            labelPart.Position + Vector3.new(0, yOffset, 0)
                         )
-                        data.NameTag.Visible = true
-                    else
-                        data.NameTag.Visible = false
+
+                        if headScreen.Z > 0 then
+                            local meters = 0
+                            if myRoot then
+                                meters = (myRoot.Position - root.Position).Magnitude * STUD_TO_METER
+                            end
+
+                            data.NameTag.Position = UDim2.new(0, headScreen.X, 0, headScreen.Y - 8)
+                            data.NameTag.Text = string.format(
+                                "%s  •  %.1f m",
+                                player.DisplayName,
+                                meters
+                            )
+                            data.NameTag.Visible = true
+                        else
+                            data.NameTag.Visible = false
+                        end
                     end
                 end
             end
@@ -1759,6 +2112,23 @@ local function ApplyESPColor(color)
             data.NameTag.TextColor3 = espColor:Lerp(Color3.new(1, 1, 1), 0.72)
         end
     end
+
+    for _, data in pairs(VantageBotRadar.Objects) do
+        for _, line in ipairs(data.Lines or {}) do
+            if line and line.Parent then
+                line.BackgroundColor3 = espColor
+                local stroke = line:FindFirstChildOfClass("UIStroke")
+                if stroke then
+                    stroke.Color = espColor:Lerp(Color3.new(1, 1, 1), 0.55)
+                end
+            end
+        end
+
+        if data.NameTag and data.NameTag.Parent then
+            data.NameTag.TextColor3 = espColor:Lerp(Color3.new(1, 1, 1), 0.72)
+        end
+    end
+
 end
 
 local function SetESPEnabled(enabled)
@@ -1771,6 +2141,7 @@ local function SetESPEnabled(enabled)
         StopESPUpdater()
         espReconcileElapsed = 0
         RefreshESP()
+        VantageBotRadar.Clear()
     end
 end
 
@@ -1864,15 +2235,18 @@ local function AttachESPCharacterWatcher(player)
 
                 -- Short bounded retry burst for streamed/late rig parts.
                 -- Stops as soon as ESP is successfully created.
-                for _ = 1, 8 do
-                    if not espEnabled or player.Character ~= character or espObjects[player] then
+                for _ = 1, 12 do
+                    if not espEnabled or player.Character ~= character then
                         break
                     end
 
-                    task.wait(0.08)
+                    task.wait(0.10)
 
-                    if character.Parent then
+                    local data = espObjects[player]
+                    if character.Parent and (not data or data.Character ~= character) then
                         CreateESP(player)
+                    elseif data and data.Character == character then
+                        break
                     end
                 end
             end)
@@ -3800,16 +4174,11 @@ ESPMainBtn.MouseButton1Click:Connect(function()
         SetESPEnabled(targetState)
     end)
 
-ESPColorBtn.MouseButton1Click:Connect(function()
-    OpenESPColorPicker()
-end)
-
     if not ok then
         espEnabled = false
         warn("VANTAGE ESP ERROR: " .. tostring(err))
     end
 
-    local title = ESPMainBtn:FindFirstChildOfClass("TextLabel")
     local labels = ESPMainBtn:GetChildren()
 
     for _, obj in ipairs(labels) do
@@ -3818,6 +4187,10 @@ end)
             obj.TextColor3 = espEnabled and T.Green or T.Text
         end
     end
+end)
+
+ESPColorBtn.MouseButton1Click:Connect(function()
+    OpenESPColorPicker()
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
@@ -4026,10 +4399,19 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         end
     end
 
-    local function GetTargetPart(player)
-        if not player or player == LocalPlayer then return nil end
+    local function GetTargetPart(target)
+        if not target or target == LocalPlayer then return nil end
 
-        local character = player.Character
+        local character = nil
+
+        if target:IsA("Player") then
+            character = target.Character
+        elseif target:IsA("Model") then
+            character = target
+        else
+            return nil
+        end
+
         if not character or not character.Parent then return nil end
 
         local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -4040,12 +4422,14 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         end
 
         return character:FindFirstChild(aimTargetPart)
+            or character:FindFirstChild(aimTargetPart, true)
             or character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("HumanoidRootPart", true)
     end
 
-    local function IsInsideFOV(player)
+    local function IsInsideFOV(target)
         local camera = workspace.CurrentCamera
-        local part = GetTargetPart(player)
+        local part = GetTargetPart(target)
         if not camera or not part then return false, math.huge end
 
         local point, visible = camera:WorldToViewportPoint(part.Position)
@@ -4059,21 +4443,41 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     end
 
     local function FindClosestTarget()
-        local bestPlayer = nil
+        local bestTarget = nil
         local bestDistance = aimFOVRadius
 
+        -- Real players
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer then
                 local inside, distance = IsInsideFOV(player)
 
                 if inside and distance < bestDistance then
                     bestDistance = distance
-                    bestPlayer = player
+                    bestTarget = player
                 end
             end
         end
 
-        return bestPlayer
+        -- Bots / NPCs already detected by VantageBotRadar
+        if VantageBotRadar and VantageBotRadar.Objects then
+            for model, data in pairs(VantageBotRadar.Objects) do
+                if model
+                    and model.Parent
+                    and data
+                    and data.Humanoid
+                    and data.Humanoid.Health > 0 then
+
+                    local inside, distance = IsInsideFOV(model)
+
+                    if inside and distance < bestDistance then
+                        bestDistance = distance
+                        bestTarget = model
+                    end
+                end
+            end
+        end
+
+        return bestTarget
     end
 
     local function ClearTarget()
@@ -4082,6 +4486,10 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     end
 
     local function AcquireTarget()
+        if espEnabled and VantageBotRadar and VantageBotRadar.Reconcile then
+            pcall(VantageBotRadar.Reconcile)
+        end
+
         lockedTarget = FindClosestTarget()
 
         if lockedTarget then
