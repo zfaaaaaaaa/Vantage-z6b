@@ -117,6 +117,7 @@ local walkSpeedValue = DEFAULT_WALK_SPEED
 local antiFallEnabled = false
 local autoReturnEnabled = false
 local antiFallConnection = nil
+local speedBoostConnection = nil
 local lastSafeLocationName = nil
 local locationNamePromptOpen = false
 local pendingSavedCFrame = nil
@@ -331,6 +332,13 @@ local function DeleteLocation(name)
     SaveLocationsFile()
 end
 
+local function StopSpeedBoost()
+    if speedBoostConnection then
+        speedBoostConnection:Disconnect()
+        speedBoostConnection = nil
+    end
+end
+
 local function ApplyWalkSpeed()
     local humanoid = GetHumanoid()
     if humanoid then
@@ -338,10 +346,46 @@ local function ApplyWalkSpeed()
     end
 end
 
-local function SetWalkSpeed(value)
-    walkSpeedValue = math.clamp(tonumber(value) or DEFAULT_WALK_SPEED, 8, 700)
-    ApplyWalkSpeed()
+local function StartSpeedBoost()
+    StopSpeedBoost()
+
+    speedBoostConnection = RunService.Heartbeat:Connect(function()
+        local humanoid = GetHumanoid()
+        local root = GetRoot()
+
+        if not humanoid or not root or humanoid.Health <= 0 then
+            return
+        end
+
+        -- Keep the Roblox property synced too.
+        humanoid.WalkSpeed = walkSpeedValue
+
+        local direction = humanoid.MoveDirection
+        if direction.Magnitude > 0.01 then
+            local currentVelocity = root.AssemblyLinearVelocity
+
+            -- Strong horizontal movement boost.
+            -- Preserve vertical velocity so jumping/falling still works normally.
+            local targetSpeed = math.max(0, walkSpeedValue)
+            root.AssemblyLinearVelocity = Vector3.new(
+                direction.X * targetSpeed,
+                currentVelocity.Y,
+                direction.Z * targetSpeed
+            )
+        end
+    end)
 end
+
+local function SetWalkSpeed(value)
+    walkSpeedValue = math.clamp(tonumber(value) or DEFAULT_WALK_SPEED, 8, 3000)
+    ApplyWalkSpeed()
+
+    if not speedBoostConnection then
+        StartSpeedBoost()
+    end
+end
+
+StartSpeedBoost()
 
 local function StopAntiFall()
     if antiFallConnection then
@@ -3410,13 +3454,13 @@ local function MovementSlider(y, minValue, maxValue, initialValue, onChanged)
     return setValue
 end
 
-local SetWalkSliderVisual = MovementSlider(112, 8, 700, walkSpeedValue, function(value)
+local SetWalkSliderVisual = MovementSlider(112, 8, 3000, walkSpeedValue, function(value)
     SetWalkSpeed(value)
     SpeedValue.Text = tostring(walkSpeedValue)
 end)
 
 Text(MovementFrame, "8", UDim2.new(0, 30, 0, 18), UDim2.new(0, 18, 0, 124), Enum.Font.Gotham, 8, T.Muted)
-Text(MovementFrame, "700", UDim2.new(0, 40, 0, 18), UDim2.new(0, 330, 0, 124), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right)
+Text(MovementFrame, "3000", UDim2.new(0, 50, 0, 18), UDim2.new(0, 320, 0, 124), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right)
 
 local AntiFallBtn = Instance.new("TextButton")
 AntiFallBtn.Size = UDim2.new(0, 170, 0, 42)
@@ -4189,6 +4233,7 @@ CloseBtn.MouseButton1Click:Connect(function()
     loopPlaying = false
     loopTeleporting = false
     StopAntiFall()
+    StopSpeedBoost()
     StopFly()
     StopSpectate()
 
