@@ -112,8 +112,11 @@ VantageBotRadar = VantageBotRadar or {
 VantageMonsterSafe = VantageMonsterSafe or {
     Enabled = false,
     Original = {},
+    DisabledModels = {},
     Elapsed = 0,
 }
+
+VantageMonsterSafe.DisabledModels = VantageMonsterSafe.DisabledModels or {}
 
 
 local savedLocations = {}
@@ -2350,7 +2353,11 @@ function VantageMonsterSafe.IsPlayerCharacter(model)
 
     for _, player in ipairs(Players:GetPlayers()) do
         local character = player.Character
-        if character and (model == character or model:IsDescendantOf(character)) then
+        if character and (
+            model == character
+            or model:IsDescendantOf(character)
+            or character:IsDescendantOf(model)
+        ) then
             return true
         end
     end
@@ -2358,51 +2365,115 @@ function VantageMonsterSafe.IsPlayerCharacter(model)
     return false
 end
 
-function VantageMonsterSafe.GetMonsterContainer(humanoid)
-    if not humanoid or not humanoid.Parent then
+function VantageMonsterSafe.HasMonsterName(instance)
+    if not instance then return false end
+
+    local name = string.lower(tostring(instance.Name or ""))
+    local keywords = {
+        "monster", "enemy", "npc", "boss", "killer",
+        "creature", "mob", "entity", "zombie", "beast",
+        "enemyai", "hostile", "chaser"
+    }
+
+    for _, word in ipairs(keywords) do
+        if string.find(name, word, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+function VantageMonsterSafe.IsAnimatedNPC(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
+
+    if model:FindFirstChildOfClass("Humanoid") then
+        return true
+    end
+
+    if model:FindFirstChildOfClass("AnimationController") then
+        return true
+    end
+
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("AnimationController") then
+            return true
+        end
+
+        if d:IsA("Animator") then
+            local p = d.Parent
+            if p and p:IsA("AnimationController") then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+function VantageMonsterSafe.GetTopMonsterModel(model)
+    if not model or not model:IsA("Model") then
         return nil
     end
 
-    local model = humanoid.Parent
-    if not model:IsA("Model") or VantageMonsterSafe.IsPlayerCharacter(model) then
-        return nil
-    end
-
-    -- Large monsters often keep the actual rig inside one or two wrapper Models.
-    -- Climb a few Model parents so the visible mesh/body gets hidden too.
-    local container = model
+    local current = model
     local depth = 0
 
-    while container.Parent
-        and container.Parent:IsA("Model")
-        and depth < 3
-        and not VantageMonsterSafe.IsPlayerCharacter(container.Parent) do
+    while current.Parent
+        and current.Parent:IsA("Model")
+        and depth < 4
+        and not VantageMonsterSafe.IsPlayerCharacter(current.Parent) do
 
-        local parentModel = container.Parent
+        local parentModel = current.Parent
 
-        -- Don't climb into a giant map/container that contains many unrelated humanoids.
-        local humanoidCount = 0
-        for _, descendant in ipairs(parentModel:GetDescendants()) do
-            if descendant:IsA("Humanoid") then
-                humanoidCount += 1
-                if humanoidCount > 3 then
-                    break
-                end
+        -- Stop before swallowing huge map containers.
+        local basePartCount = 0
+        local modelCount = 0
+        for _, d in ipairs(parentModel:GetDescendants()) do
+            if d:IsA("BasePart") then
+                basePartCount += 1
+            elseif d:IsA("Model") then
+                modelCount += 1
+            end
+
+            if basePartCount > 250 or modelCount > 80 then
+                break
             end
         end
 
-        if humanoidCount > 3 then
+        if basePartCount > 250 or modelCount > 80 then
             break
         end
 
-        container = parentModel
+        current = parentModel
         depth += 1
     end
 
-    return container
+    return current
 end
 
-function VantageMonsterSafe.HideModel(model)
+function VantageMonsterSafe.IsMonsterCandidate(model)
+    if not model
+        or not model:IsA("Model")
+        or not model.Parent
+        or VantageMonsterSafe.IsPlayerCharacter(model) then
+        return false
+    end
+
+    if VantageMonsterSafe.HasMonsterName(model) then
+        return true
+    end
+
+    if VantageMonsterSafe.IsAnimatedNPC(model) then
+        return true
+    end
+
+    return false
+end
+
+function VantageMonsterSafe.DisableModel(model)
     if not VantageMonsterSafe.Enabled
         or not model
         or not model:IsA("Model")
@@ -2410,45 +2481,26 @@ function VantageMonsterSafe.HideModel(model)
         return
     end
 
-    for _, obj in ipairs(model:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            if not VantageMonsterSafe.Original[obj] then
-                VantageMonsterSafe.Original[obj] = {
-                    LocalTransparencyModifier = obj.LocalTransparencyModifier,
-                    CanTouch = obj.CanTouch,
-                    CanCollide = obj.CanCollide,
-                    CanQuery = obj.CanQuery,
-                }
-            end
+    local topModel = VantageMonsterSafe.GetTopMonsterModel(model) or model
 
-            obj.LocalTransparencyModifier = 1
-            obj.CanTouch = false
-            obj.CanCollide = false
-            obj.CanQuery = false
-
-        elseif obj:IsA("Decal") or obj:IsA("Texture") then
-            if not VantageMonsterSafe.Original[obj] then
-                VantageMonsterSafe.Original[obj] = {
-                    Transparency = obj.Transparency,
-                }
-            end
-            obj.Transparency = 1
-
-        elseif obj:IsA("ParticleEmitter")
-            or obj:IsA("Trail")
-            or obj:IsA("Beam")
-            or obj:IsA("Smoke")
-            or obj:IsA("Fire")
-            or obj:IsA("Sparkles") then
-
-            if not VantageMonsterSafe.Original[obj] then
-                VantageMonsterSafe.Original[obj] = {
-                    Enabled = obj.Enabled,
-                }
-            end
-            obj.Enabled = false
-        end
+    if VantageMonsterSafe.IsPlayerCharacter(topModel) then
+        return
     end
+
+    if VantageMonsterSafe.DisabledModels[topModel] then
+        return
+    end
+
+    local parent = topModel.Parent
+    if not parent then return end
+
+    VantageMonsterSafe.DisabledModels[topModel] = parent
+
+    -- Removing the replicated model locally is much stronger than transparency:
+    -- visual body, local hitboxes, TouchInterests and client-side AI all disappear.
+    pcall(function()
+        topModel.Parent = nil
+    end)
 end
 
 function VantageMonsterSafe.Apply()
@@ -2456,64 +2508,84 @@ function VantageMonsterSafe.Apply()
         return
     end
 
-    local processed = {}
+    local candidates = {}
 
-    -- Primary detection: every non-player Humanoid, then hide its wrapper/container.
-    for _, descendant in ipairs(workspace:GetDescendants()) do
-        if descendant:IsA("Humanoid") and descendant.Health > 0 then
-            local container = VantageMonsterSafe.GetMonsterContainer(descendant)
-            if container and not processed[container] then
-                processed[container] = true
-                VantageMonsterSafe.HideModel(container)
+    -- Standard Humanoid NPCs.
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("Humanoid") then
+            local model = d.Parent
+            if model and model:IsA("Model")
+                and not VantageMonsterSafe.IsPlayerCharacter(model) then
+                candidates[model] = true
+            end
+
+        elseif d:IsA("AnimationController") then
+            local model = d.Parent
+            while model and not model:IsA("Model") do
+                model = model.Parent
+            end
+
+            if model and model:IsA("Model")
+                and not VantageMonsterSafe.IsPlayerCharacter(model) then
+                candidates[model] = true
             end
         end
     end
 
-    -- Also hide any bot models already discovered by VANTAGE's bot radar.
+    -- Name-based fallback for custom monsters/bosses.
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:IsA("Model")
+            and not VantageMonsterSafe.IsPlayerCharacter(child)
+            and VantageMonsterSafe.HasMonsterName(child) then
+            candidates[child] = true
+        end
+
+        if child:IsA("Folder") and VantageMonsterSafe.HasMonsterName(child) then
+            for _, nested in ipairs(child:GetChildren()) do
+                if nested:IsA("Model")
+                    and not VantageMonsterSafe.IsPlayerCharacter(nested) then
+                    candidates[nested] = true
+                end
+            end
+        end
+    end
+
+    -- Reuse VANTAGE radar detections too.
     if VantageBotRadar and VantageBotRadar.Objects then
         for model in pairs(VantageBotRadar.Objects) do
             if model and model.Parent and not VantageMonsterSafe.IsPlayerCharacter(model) then
-                local container = model
-                local humanoid = model:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    container = VantageMonsterSafe.GetMonsterContainer(humanoid) or model
-                end
-
-                if not processed[container] then
-                    processed[container] = true
-                    VantageMonsterSafe.HideModel(container)
-                end
+                candidates[model] = true
             end
+        end
+    end
+
+    for model in pairs(candidates) do
+        if VantageMonsterSafe.IsMonsterCandidate(model)
+            or (VantageBotRadar and VantageBotRadar.Objects and VantageBotRadar.Objects[model]) then
+            VantageMonsterSafe.DisableModel(model)
         end
     end
 end
 
 function VantageMonsterSafe.Restore()
-    for obj, state in pairs(VantageMonsterSafe.Original) do
-        if obj and obj.Parent and type(state) == "table" then
+    local restoreList = {}
+
+    for model, parent in pairs(VantageMonsterSafe.DisabledModels) do
+        table.insert(restoreList, {Model = model, Parent = parent})
+    end
+
+    VantageMonsterSafe.DisabledModels = {}
+
+    for _, item in ipairs(restoreList) do
+        local model = item.Model
+        local parent = item.Parent
+
+        if model and parent and parent.Parent then
             pcall(function()
-                if obj:IsA("BasePart") then
-                    obj.LocalTransparencyModifier = state.LocalTransparencyModifier or 0
-                    obj.CanTouch = state.CanTouch ~= false
-                    obj.CanCollide = state.CanCollide == true
-                    obj.CanQuery = state.CanQuery ~= false
-
-                elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                    obj.Transparency = state.Transparency or 0
-
-                elseif obj:IsA("ParticleEmitter")
-                    or obj:IsA("Trail")
-                    or obj:IsA("Beam")
-                    or obj:IsA("Smoke")
-                    or obj:IsA("Fire")
-                    or obj:IsA("Sparkles") then
-                    obj.Enabled = state.Enabled ~= false
-                end
+                model.Parent = parent
             end)
         end
     end
-
-    VantageMonsterSafe.Original = {}
 end
 
 function VantageMonsterSafe.SetEnabled(enabled)
@@ -2532,7 +2604,7 @@ if not VantageMonsterSafe.Connection then
         if not VantageMonsterSafe.Enabled then return end
 
         VantageMonsterSafe.Elapsed += dt
-        if VantageMonsterSafe.Elapsed >= 0.20 then
+        if VantageMonsterSafe.Elapsed >= 0.10 then
             VantageMonsterSafe.Elapsed = 0
             VantageMonsterSafe.Apply()
         end
