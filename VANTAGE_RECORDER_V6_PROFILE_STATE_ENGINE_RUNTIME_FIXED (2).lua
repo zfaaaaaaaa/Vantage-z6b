@@ -2343,24 +2343,70 @@ local function DetachESPCharacterWatcher(player)
 end
 
 
-function VantageMonsterSafe.IsMonster(model)
-    if not model or not model:IsA("Model") then return false end
+function VantageMonsterSafe.IsPlayerCharacter(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
 
     for _, player in ipairs(Players:GetPlayers()) do
-        if player.Character == model then
-            return false
+        local character = player.Character
+        if character and (model == character or model:IsDescendantOf(character)) then
+            return true
         end
     end
 
-    local humanoid = model:FindFirstChildOfClass("Humanoid")
-    local root = model:FindFirstChild("HumanoidRootPart")
-        or model:FindFirstChild("HumanoidRootPart", true)
+    return false
+end
 
-    return humanoid ~= nil and root ~= nil and humanoid.Health > 0
+function VantageMonsterSafe.GetMonsterContainer(humanoid)
+    if not humanoid or not humanoid.Parent then
+        return nil
+    end
+
+    local model = humanoid.Parent
+    if not model:IsA("Model") or VantageMonsterSafe.IsPlayerCharacter(model) then
+        return nil
+    end
+
+    -- Large monsters often keep the actual rig inside one or two wrapper Models.
+    -- Climb a few Model parents so the visible mesh/body gets hidden too.
+    local container = model
+    local depth = 0
+
+    while container.Parent
+        and container.Parent:IsA("Model")
+        and depth < 3
+        and not VantageMonsterSafe.IsPlayerCharacter(container.Parent) do
+
+        local parentModel = container.Parent
+
+        -- Don't climb into a giant map/container that contains many unrelated humanoids.
+        local humanoidCount = 0
+        for _, descendant in ipairs(parentModel:GetDescendants()) do
+            if descendant:IsA("Humanoid") then
+                humanoidCount += 1
+                if humanoidCount > 3 then
+                    break
+                end
+            end
+        end
+
+        if humanoidCount > 3 then
+            break
+        end
+
+        container = parentModel
+        depth += 1
+    end
+
+    return container
 end
 
 function VantageMonsterSafe.HideModel(model)
-    if not VantageMonsterSafe.Enabled or not VantageMonsterSafe.IsMonster(model) then
+    if not VantageMonsterSafe.Enabled
+        or not model
+        or not model:IsA("Model")
+        or VantageMonsterSafe.IsPlayerCharacter(model) then
         return
     end
 
@@ -2379,23 +2425,64 @@ function VantageMonsterSafe.HideModel(model)
             obj.CanTouch = false
             obj.CanCollide = false
             obj.CanQuery = false
+
         elseif obj:IsA("Decal") or obj:IsA("Texture") then
             if not VantageMonsterSafe.Original[obj] then
-                VantageMonsterSafe.Original[obj] = {Transparency = obj.Transparency}
+                VantageMonsterSafe.Original[obj] = {
+                    Transparency = obj.Transparency,
+                }
             end
             obj.Transparency = 1
+
+        elseif obj:IsA("ParticleEmitter")
+            or obj:IsA("Trail")
+            or obj:IsA("Beam")
+            or obj:IsA("Smoke")
+            or obj:IsA("Fire")
+            or obj:IsA("Sparkles") then
+
+            if not VantageMonsterSafe.Original[obj] then
+                VantageMonsterSafe.Original[obj] = {
+                    Enabled = obj.Enabled,
+                }
+            end
+            obj.Enabled = false
         end
     end
 end
 
 function VantageMonsterSafe.Apply()
-    if not VantageMonsterSafe.Enabled then return end
+    if not VantageMonsterSafe.Enabled then
+        return
+    end
 
+    local processed = {}
+
+    -- Primary detection: every non-player Humanoid, then hide its wrapper/container.
     for _, descendant in ipairs(workspace:GetDescendants()) do
-        if descendant:IsA("Humanoid") then
-            local model = descendant.Parent
-            if model and model:IsA("Model") then
-                VantageMonsterSafe.HideModel(model)
+        if descendant:IsA("Humanoid") and descendant.Health > 0 then
+            local container = VantageMonsterSafe.GetMonsterContainer(descendant)
+            if container and not processed[container] then
+                processed[container] = true
+                VantageMonsterSafe.HideModel(container)
+            end
+        end
+    end
+
+    -- Also hide any bot models already discovered by VANTAGE's bot radar.
+    if VantageBotRadar and VantageBotRadar.Objects then
+        for model in pairs(VantageBotRadar.Objects) do
+            if model and model.Parent and not VantageMonsterSafe.IsPlayerCharacter(model) then
+                local container = model
+                local humanoid = model:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    container = VantageMonsterSafe.GetMonsterContainer(humanoid) or model
+                end
+
+                if not processed[container] then
+                    processed[container] = true
+                    VantageMonsterSafe.HideModel(container)
+                end
             end
         end
     end
@@ -2403,19 +2490,29 @@ end
 
 function VantageMonsterSafe.Restore()
     for obj, state in pairs(VantageMonsterSafe.Original) do
-        if obj and obj.Parent then
+        if obj and obj.Parent and type(state) == "table" then
             pcall(function()
                 if obj:IsA("BasePart") then
                     obj.LocalTransparencyModifier = state.LocalTransparencyModifier or 0
                     obj.CanTouch = state.CanTouch ~= false
                     obj.CanCollide = state.CanCollide == true
                     obj.CanQuery = state.CanQuery ~= false
+
                 elseif obj:IsA("Decal") or obj:IsA("Texture") then
                     obj.Transparency = state.Transparency or 0
+
+                elseif obj:IsA("ParticleEmitter")
+                    or obj:IsA("Trail")
+                    or obj:IsA("Beam")
+                    or obj:IsA("Smoke")
+                    or obj:IsA("Fire")
+                    or obj:IsA("Sparkles") then
+                    obj.Enabled = state.Enabled ~= false
                 end
             end)
         end
     end
+
     VantageMonsterSafe.Original = {}
 end
 
@@ -2435,7 +2532,7 @@ if not VantageMonsterSafe.Connection then
         if not VantageMonsterSafe.Enabled then return end
 
         VantageMonsterSafe.Elapsed += dt
-        if VantageMonsterSafe.Elapsed >= 0.35 then
+        if VantageMonsterSafe.Elapsed >= 0.20 then
             VantageMonsterSafe.Elapsed = 0
             VantageMonsterSafe.Apply()
         end
