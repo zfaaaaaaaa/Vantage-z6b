@@ -109,6 +109,12 @@ VantageBotRadar = VantageBotRadar or {
     Elapsed = 0,
 }
 
+VantageMonsterSafe = VantageMonsterSafe or {
+    Enabled = false,
+    Original = {},
+    Elapsed = 0,
+}
+
 
 local savedLocations = {}
 local loopTeleporting = false
@@ -2336,6 +2342,106 @@ local function DetachESPCharacterWatcher(player)
     end
 end
 
+
+function VantageMonsterSafe.IsMonster(model)
+    if not model or not model:IsA("Model") then return false end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character == model then
+            return false
+        end
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("HumanoidRootPart", true)
+
+    return humanoid ~= nil and root ~= nil and humanoid.Health > 0
+end
+
+function VantageMonsterSafe.HideModel(model)
+    if not VantageMonsterSafe.Enabled or not VantageMonsterSafe.IsMonster(model) then
+        return
+    end
+
+    for _, obj in ipairs(model:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if not VantageMonsterSafe.Original[obj] then
+                VantageMonsterSafe.Original[obj] = {
+                    LocalTransparencyModifier = obj.LocalTransparencyModifier,
+                    CanTouch = obj.CanTouch,
+                    CanCollide = obj.CanCollide,
+                    CanQuery = obj.CanQuery,
+                }
+            end
+
+            obj.LocalTransparencyModifier = 1
+            obj.CanTouch = false
+            obj.CanCollide = false
+            obj.CanQuery = false
+        elseif obj:IsA("Decal") or obj:IsA("Texture") then
+            if not VantageMonsterSafe.Original[obj] then
+                VantageMonsterSafe.Original[obj] = {Transparency = obj.Transparency}
+            end
+            obj.Transparency = 1
+        end
+    end
+end
+
+function VantageMonsterSafe.Apply()
+    if not VantageMonsterSafe.Enabled then return end
+
+    for _, descendant in ipairs(workspace:GetDescendants()) do
+        if descendant:IsA("Humanoid") then
+            local model = descendant.Parent
+            if model and model:IsA("Model") then
+                VantageMonsterSafe.HideModel(model)
+            end
+        end
+    end
+end
+
+function VantageMonsterSafe.Restore()
+    for obj, state in pairs(VantageMonsterSafe.Original) do
+        if obj and obj.Parent then
+            pcall(function()
+                if obj:IsA("BasePart") then
+                    obj.LocalTransparencyModifier = state.LocalTransparencyModifier or 0
+                    obj.CanTouch = state.CanTouch ~= false
+                    obj.CanCollide = state.CanCollide == true
+                    obj.CanQuery = state.CanQuery ~= false
+                elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                    obj.Transparency = state.Transparency or 0
+                end
+            end)
+        end
+    end
+    VantageMonsterSafe.Original = {}
+end
+
+function VantageMonsterSafe.SetEnabled(enabled)
+    VantageMonsterSafe.Enabled = enabled and true or false
+    VantageMonsterSafe.Elapsed = 0
+
+    if VantageMonsterSafe.Enabled then
+        VantageMonsterSafe.Apply()
+    else
+        VantageMonsterSafe.Restore()
+    end
+end
+
+if not VantageMonsterSafe.Connection then
+    VantageMonsterSafe.Connection = RunService.Heartbeat:Connect(function(dt)
+        if not VantageMonsterSafe.Enabled then return end
+
+        VantageMonsterSafe.Elapsed += dt
+        if VantageMonsterSafe.Elapsed >= 0.35 then
+            VantageMonsterSafe.Elapsed = 0
+            VantageMonsterSafe.Apply()
+        end
+    end)
+end
+
 -- CREATE GUI - VANTAGE MINIMAL NAVY
 -- ============================================
 
@@ -3345,7 +3451,7 @@ end)
 
 local MovementFrame = Instance.new("Frame")
 MovementFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MovementFrame.Size = UDim2.new(0, 430, 0, 390)
+MovementFrame.Size = UDim2.new(0, 430, 0, 455)
 MovementFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MovementFrame.BackgroundColor3 = T.Black
 MovementFrame.BorderSizePixel = 0
@@ -3530,6 +3636,25 @@ FlyBtn.MouseButton1Click:Connect(function()
 end)
 
 Text(MovementFrame, "WASD = move   SPACE = up   LEFT CTRL = down", UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 354), Enum.Font.Gotham, 9, T.Muted)
+
+local MonsterSafeBtn = Instance.new("TextButton")
+MonsterSafeBtn.Size = UDim2.new(0, 394, 0, 42)
+MonsterSafeBtn.Position = UDim2.new(0, 18, 0, 386)
+MonsterSafeBtn.BackgroundColor3 = T.Navy
+MonsterSafeBtn.BorderSizePixel = 0
+MonsterSafeBtn.Text = "MONSTER SAFE: OFF"
+MonsterSafeBtn.TextColor3 = T.Muted
+MonsterSafeBtn.TextSize = 10
+MonsterSafeBtn.Font = Enum.Font.GothamBold
+MonsterSafeBtn.Parent = MovementFrame
+Corner(MonsterSafeBtn, 9)
+Stroke(MonsterSafeBtn, T.Border, 0.2)
+
+MonsterSafeBtn.MouseButton1Click:Connect(function()
+    VantageMonsterSafe.SetEnabled(not VantageMonsterSafe.Enabled)
+    MonsterSafeBtn.Text = VantageMonsterSafe.Enabled and "MONSTER SAFE: ON" or "MONSTER SAFE: OFF"
+    MonsterSafeBtn.TextColor3 = VantageMonsterSafe.Enabled and T.Green or T.Muted
+end)
 
 MovementClose.MouseButton1Click:Connect(function()
     MovementFrame.Visible = false
@@ -4235,6 +4360,11 @@ CloseBtn.MouseButton1Click:Connect(function()
     StopAntiFall()
     StopSpeedBoost()
     StopFly()
+    VantageMonsterSafe.SetEnabled(false)
+    if VantageMonsterSafe.Connection then
+        VantageMonsterSafe.Connection:Disconnect()
+        VantageMonsterSafe.Connection = nil
+    end
     StopSpectate()
 
     MenuOpen = false
