@@ -339,7 +339,7 @@ local function ApplyWalkSpeed()
 end
 
 local function SetWalkSpeed(value)
-    walkSpeedValue = math.clamp(tonumber(value) or DEFAULT_WALK_SPEED, 8, 100)
+    walkSpeedValue = math.clamp(tonumber(value) or DEFAULT_WALK_SPEED, 8, 700)
     ApplyWalkSpeed()
 end
 
@@ -2156,7 +2156,7 @@ ApplyProfile = function(name)
 
     -- MOVEMENT
     SetWalkSpeed(tonumber(profile.WalkSpeed) or DEFAULT_WALK_SPEED)
-    flySpeed = math.clamp(tonumber(profile.FlySpeed) or flySpeed, 10, 200)
+    flySpeed = math.clamp(tonumber(profile.FlySpeed) or flySpeed, 10, 700)
 
     antiFallEnabled = profile.AntiFall == true
     autoReturnEnabled = profile.AutoReturn == true
@@ -3484,12 +3484,12 @@ FlyBtn.MouseButton1Click:Connect(function()
 end)
 
 FlyMinus.MouseButton1Click:Connect(function()
-    flySpeed = math.clamp(flySpeed - 10, 20, 200)
+    flySpeed = math.clamp(flySpeed - 10, 20, 700)
     FlySpeedText.Text = tostring(flySpeed)
 end)
 
 FlyPlus.MouseButton1Click:Connect(function()
-    flySpeed = math.clamp(flySpeed + 10, 20, 200)
+    flySpeed = math.clamp(flySpeed + 10, 20, 700)
     FlySpeedText.Text = tostring(flySpeed)
 end)
 
