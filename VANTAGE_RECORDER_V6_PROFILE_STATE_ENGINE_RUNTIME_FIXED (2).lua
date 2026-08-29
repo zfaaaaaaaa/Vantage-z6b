@@ -113,10 +113,12 @@ VantageMonsterSafe = VantageMonsterSafe or {
     Enabled = false,
     Original = {},
     DisabledModels = {},
+    ManualTargets = {},
     Elapsed = 0,
 }
 
 VantageMonsterSafe.DisabledModels = VantageMonsterSafe.DisabledModels or {}
+VantageMonsterSafe.ManualTargets = VantageMonsterSafe.ManualTargets or {}
 
 
 local savedLocations = {}
@@ -2565,6 +2567,8 @@ function VantageMonsterSafe.Apply()
             VantageMonsterSafe.DisableModel(model)
         end
     end
+
+    VantageMonsterSafe.ApplyManualTargets()
 end
 
 function VantageMonsterSafe.Restore()
@@ -2583,6 +2587,106 @@ function VantageMonsterSafe.Restore()
         if model and parent and parent.Parent then
             pcall(function()
                 model.Parent = parent
+            end)
+        end
+    end
+
+    VantageMonsterSafe.RestoreManualTargets()
+end
+
+
+function VantageMonsterSafe.GetManualTargetFromMouse()
+    local mouse = LocalPlayer:GetMouse()
+    local hit = mouse and mouse.Target
+    if not hit or not hit.Parent then
+        return nil
+    end
+
+    -- Never allow selecting your own character or another real player character.
+    for _, player in ipairs(Players:GetPlayers()) do
+        local character = player.Character
+        if character and (hit:IsDescendantOf(character) or hit == character) then
+            return nil
+        end
+    end
+
+    -- Prefer the nearest meaningful Model containing the clicked part.
+    local target = hit
+    local current = hit.Parent
+    local depth = 0
+
+    while current and current ~= workspace and depth < 5 do
+        if current:IsA("Model") then
+            target = current
+
+            -- If this model looks like a character/creature container, stop here.
+            if current:FindFirstChildOfClass("Humanoid")
+                or current:FindFirstChildOfClass("AnimationController")
+                or current:FindFirstChild("HumanoidRootPart", true) then
+                break
+            end
+        end
+
+        current = current.Parent
+        depth += 1
+    end
+
+    return target
+end
+
+function VantageMonsterSafe.AddManualTarget(target)
+    if not target or not target.Parent then
+        return false
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        local character = player.Character
+        if character and (
+            target == character
+            or target:IsDescendantOf(character)
+            or character:IsDescendantOf(target)
+        ) then
+            return false
+        end
+    end
+
+    if VantageMonsterSafe.ManualTargets[target] then
+        return true
+    end
+
+    VantageMonsterSafe.ManualTargets[target] = {
+        Parent = target.Parent,
+        Name = target.Name,
+    }
+
+    if VantageMonsterSafe.Enabled then
+        pcall(function()
+            target.Parent = nil
+        end)
+    end
+
+    return true
+end
+
+function VantageMonsterSafe.ApplyManualTargets()
+    if not VantageMonsterSafe.Enabled then
+        return
+    end
+
+    for target, data in pairs(VantageMonsterSafe.ManualTargets) do
+        if target then
+            pcall(function()
+                target.Parent = nil
+            end)
+        end
+    end
+end
+
+function VantageMonsterSafe.RestoreManualTargets()
+    for target, data in pairs(VantageMonsterSafe.ManualTargets) do
+        if target and data and data.Parent and data.Parent.Parent then
+            pcall(function()
+                target.Parent = data.Parent
             end)
         end
     end
@@ -3620,7 +3724,7 @@ end)
 
 local MovementFrame = Instance.new("Frame")
 MovementFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MovementFrame.Size = UDim2.new(0, 430, 0, 455)
+MovementFrame.Size = UDim2.new(0, 430, 0, 510)
 MovementFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MovementFrame.BackgroundColor3 = T.Black
 MovementFrame.BorderSizePixel = 0
@@ -3807,7 +3911,7 @@ end)
 Text(MovementFrame, "WASD = move   SPACE = up   LEFT CTRL = down", UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 354), Enum.Font.Gotham, 9, T.Muted)
 
 local MonsterSafeBtn = Instance.new("TextButton")
-MonsterSafeBtn.Size = UDim2.new(0, 394, 0, 42)
+MonsterSafeBtn.Size = UDim2.new(0, 190, 0, 42)
 MonsterSafeBtn.Position = UDim2.new(0, 18, 0, 386)
 MonsterSafeBtn.BackgroundColor3 = T.Navy
 MonsterSafeBtn.BorderSizePixel = 0
@@ -3819,10 +3923,57 @@ MonsterSafeBtn.Parent = MovementFrame
 Corner(MonsterSafeBtn, 9)
 Stroke(MonsterSafeBtn, T.Border, 0.2)
 
+local MonsterTargetBtn = Instance.new("TextButton")
+MonsterTargetBtn.Size = UDim2.new(0, 190, 0, 42)
+MonsterTargetBtn.Position = UDim2.new(0, 222, 0, 386)
+MonsterTargetBtn.BackgroundColor3 = T.Navy
+MonsterTargetBtn.BorderSizePixel = 0
+MonsterTargetBtn.Text = "ADD LOOK TARGET"
+MonsterTargetBtn.TextColor3 = T.BlueSoft
+MonsterTargetBtn.TextSize = 10
+MonsterTargetBtn.Font = Enum.Font.GothamBold
+MonsterTargetBtn.Parent = MovementFrame
+Corner(MonsterTargetBtn, 9)
+Stroke(MonsterTargetBtn, T.Border, 0.2)
+
+local MonsterTargetStatus = Text(
+    MovementFrame,
+    "Point your mouse at the monster, then press ADD LOOK TARGET",
+    UDim2.new(1, -36, 0, 34),
+    UDim2.new(0, 18, 0, 438),
+    Enum.Font.Gotham,
+    9,
+    T.Muted
+)
+
 MonsterSafeBtn.MouseButton1Click:Connect(function()
     VantageMonsterSafe.SetEnabled(not VantageMonsterSafe.Enabled)
     MonsterSafeBtn.Text = VantageMonsterSafe.Enabled and "MONSTER SAFE: ON" or "MONSTER SAFE: OFF"
     MonsterSafeBtn.TextColor3 = VantageMonsterSafe.Enabled and T.Green or T.Muted
+end)
+
+MonsterTargetBtn.MouseButton1Click:Connect(function()
+    local target = VantageMonsterSafe.GetManualTargetFromMouse()
+
+    if not target then
+        MonsterTargetStatus.Text = "No valid monster/object under mouse."
+        MonsterTargetStatus.TextColor3 = T.Red
+        return
+    end
+
+    local ok = VantageMonsterSafe.AddManualTarget(target)
+
+    if ok then
+        MonsterTargetStatus.Text = "Target added: " .. tostring(target.Name)
+        MonsterTargetStatus.TextColor3 = T.Green
+
+        if VantageMonsterSafe.Enabled then
+            VantageMonsterSafe.ApplyManualTargets()
+        end
+    else
+        MonsterTargetStatus.Text = "Could not add this target."
+        MonsterTargetStatus.TextColor3 = T.Red
+    end
 end)
 
 MovementClose.MouseButton1Click:Connect(function()
