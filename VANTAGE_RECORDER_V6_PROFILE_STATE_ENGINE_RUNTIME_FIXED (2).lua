@@ -587,6 +587,7 @@ local function CaptureCurrentProfile()
         if okAim and type(aimState) == "table" then
             profile.AimEnabled = aimState.Enabled == true
             profile.AimFOVRadius = tonumber(aimState.FOV) or 150
+            profile.AimMaxDistance = tonumber(aimState.MaxDistance) or 700
             profile.AimSmoothness = tonumber(aimState.Smoothness) or 1
             profile.AimTargetPart = aimState.TargetPart or "Head"
         end
@@ -2199,6 +2200,7 @@ ApplyProfile = function(name)
             VantageProfileBridge.ApplyAimState({
                 Enabled = profile.AimEnabled == true,
                 FOV = tonumber(profile.AimFOVRadius),
+                MaxDistance = tonumber(profile.AimMaxDistance),
                 Smoothness = tonumber(profile.AimSmoothness),
                 TargetPart = profile.AimTargetPart,
             })
@@ -3324,69 +3326,101 @@ MovementClose.Font = Enum.Font.GothamBold
 MovementClose.Parent = MovementFrame
 Corner(MovementClose, 8)
 
-Text(MovementFrame, "WALK SPEED", UDim2.new(0, 130, 0, 20), UDim2.new(0, 18, 0, 78), Enum.Font.GothamBold, 10, T.Muted)
-local SpeedValue = Text(MovementFrame, tostring(walkSpeedValue), UDim2.new(0, 70, 0, 32), UDim2.new(1, -88, 0, 72), Enum.Font.GothamBold, 16, T.BlueSoft, Enum.TextXAlignment.Right)
+Text(MovementFrame, "WALK SPEED", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 78), Enum.Font.GothamBold, 10, T.Muted)
+local SpeedValue = Text(MovementFrame, tostring(walkSpeedValue), UDim2.new(0, 80, 0, 24), UDim2.new(1, -98, 0, 74), Enum.Font.GothamBold, 15, T.BlueSoft, Enum.TextXAlignment.Right)
 
-local function SpeedButton(textValue, x, value)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 82, 0, 36)
-    b.Position = UDim2.new(0, x, 0, 108)
-    b.BackgroundColor3 = T.Navy
-    b.BorderSizePixel = 0
-    b.Text = textValue
-    b.TextColor3 = T.Text
-    b.TextSize = 11
-    b.Font = Enum.Font.GothamBold
-    b.Parent = MovementFrame
-    Corner(b, 8)
-    b.MouseButton1Click:Connect(function()
-        SetWalkSpeed(value)
-        SpeedValue.Text = tostring(walkSpeedValue)
+local function MovementSlider(y, minValue, maxValue, initialValue, onChanged)
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0, 352, 0, 8)
+    track.Position = UDim2.new(0, 18, 0, y)
+    track.BackgroundColor3 = T.Navy2
+    track.BorderSizePixel = 0
+    track.Parent = MovementFrame
+    Corner(track, 4)
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = T.Blue
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    Corner(fill, 4)
+
+    local knob = Instance.new("TextButton")
+    knob.AnchorPoint = Vector2.new(0.5, 0.5)
+    knob.Size = UDim2.new(0, 18, 0, 18)
+    knob.Position = UDim2.new(0, 0, 0.5, 0)
+    knob.BackgroundColor3 = T.BlueSoft
+    knob.BorderSizePixel = 0
+    knob.Text = ""
+    knob.AutoButtonColor = false
+    knob.Parent = track
+    Corner(knob, 9)
+
+    local dragging = false
+
+    local function setFromX(x)
+        local width = math.max(track.AbsoluteSize.X, 1)
+        local alpha = math.clamp((x - track.AbsolutePosition.X) / width, 0, 1)
+        local value = math.floor(minValue + (maxValue - minValue) * alpha + 0.5)
+        fill.Size = UDim2.new(alpha, 0, 1, 0)
+        knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+        onChanged(value)
+    end
+
+    local function setValue(value)
+        value = math.clamp(tonumber(value) or minValue, minValue, maxValue)
+        local alpha = (value - minValue) / (maxValue - minValue)
+        fill.Size = UDim2.new(alpha, 0, 1, 0)
+        knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromX(input.Position.X)
+        end
     end)
+
+    knob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromX(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (
+            input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch
+        ) then
+            setFromX(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    setValue(initialValue)
+    return setValue
 end
 
-SpeedButton("16", 18, 16)
-SpeedButton("24", 106, 24)
-SpeedButton("32", 194, 32)
-SpeedButton("50", 282, 50)
-
-local MinusSpeed = Instance.new("TextButton")
-MinusSpeed.Size = UDim2.new(0, 82, 0, 36)
-MinusSpeed.Position = UDim2.new(0, 18, 0, 152)
-MinusSpeed.BackgroundColor3 = T.Navy
-MinusSpeed.BorderSizePixel = 0
-MinusSpeed.Text = "- 4"
-MinusSpeed.TextColor3 = T.Muted
-MinusSpeed.TextSize = 11
-MinusSpeed.Font = Enum.Font.GothamBold
-MinusSpeed.Parent = MovementFrame
-Corner(MinusSpeed, 8)
-
-local PlusSpeed = Instance.new("TextButton")
-PlusSpeed.Size = UDim2.new(0, 82, 0, 36)
-PlusSpeed.Position = UDim2.new(0, 106, 0, 152)
-PlusSpeed.BackgroundColor3 = T.Navy
-PlusSpeed.BorderSizePixel = 0
-PlusSpeed.Text = "+ 4"
-PlusSpeed.TextColor3 = T.BlueSoft
-PlusSpeed.TextSize = 11
-PlusSpeed.Font = Enum.Font.GothamBold
-PlusSpeed.Parent = MovementFrame
-Corner(PlusSpeed, 8)
-
-MinusSpeed.MouseButton1Click:Connect(function()
-    SetWalkSpeed(walkSpeedValue - 4)
+local SetWalkSliderVisual = MovementSlider(112, 8, 700, walkSpeedValue, function(value)
+    SetWalkSpeed(value)
     SpeedValue.Text = tostring(walkSpeedValue)
 end)
 
-PlusSpeed.MouseButton1Click:Connect(function()
-    SetWalkSpeed(walkSpeedValue + 4)
-    SpeedValue.Text = tostring(walkSpeedValue)
-end)
+Text(MovementFrame, "8", UDim2.new(0, 30, 0, 18), UDim2.new(0, 18, 0, 124), Enum.Font.Gotham, 8, T.Muted)
+Text(MovementFrame, "700", UDim2.new(0, 40, 0, 18), UDim2.new(0, 330, 0, 124), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right)
 
 local AntiFallBtn = Instance.new("TextButton")
 AntiFallBtn.Size = UDim2.new(0, 170, 0, 42)
-AntiFallBtn.Position = UDim2.new(0, 18, 0, 208)
+AntiFallBtn.Position = UDim2.new(0, 18, 0, 160)
 AntiFallBtn.BackgroundColor3 = T.Navy
 AntiFallBtn.BorderSizePixel = 0
 AntiFallBtn.Text = "ANTI-FALL: OFF"
@@ -3398,7 +3432,7 @@ Corner(AntiFallBtn, 9)
 
 local AutoReturnBtn = Instance.new("TextButton")
 AutoReturnBtn.Size = UDim2.new(0, 170, 0, 42)
-AutoReturnBtn.Position = UDim2.new(0, 200, 0, 208)
+AutoReturnBtn.Position = UDim2.new(0, 200, 0, 160)
 AutoReturnBtn.BackgroundColor3 = T.Navy
 AutoReturnBtn.BorderSizePixel = 0
 AutoReturnBtn.Text = "AUTO RETURN: OFF"
@@ -3410,13 +3444,7 @@ Corner(AutoReturnBtn, 9)
 
 AntiFallBtn.MouseButton1Click:Connect(function()
     antiFallEnabled = not antiFallEnabled
-
-    if antiFallEnabled then
-        StartAntiFall()
-    else
-        StopAntiFall()
-    end
-
+    if antiFallEnabled then StartAntiFall() else StopAntiFall() end
     AntiFallBtn.Text = antiFallEnabled and "ANTI-FALL: ON" or "ANTI-FALL: OFF"
     AntiFallBtn.TextColor3 = antiFallEnabled and T.Green or T.Muted
 end)
@@ -3427,11 +3455,20 @@ AutoReturnBtn.MouseButton1Click:Connect(function()
     AutoReturnBtn.TextColor3 = autoReturnEnabled and T.Green or T.Muted
 end)
 
-Text(MovementFrame, "FLY", UDim2.new(0, 100, 0, 20), UDim2.new(0, 18, 0, 270), Enum.Font.GothamBold, 10, T.Muted)
+Text(MovementFrame, "FLY SPEED", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 224), Enum.Font.GothamBold, 10, T.Muted)
+local FlySpeedText = Text(MovementFrame, tostring(flySpeed), UDim2.new(0, 80, 0, 24), UDim2.new(1, -98, 0, 220), Enum.Font.GothamBold, 15, T.BlueSoft, Enum.TextXAlignment.Right)
+
+local SetFlySliderVisual = MovementSlider(258, 20, 700, flySpeed, function(value)
+    flySpeed = math.clamp(value, 20, 700)
+    FlySpeedText.Text = tostring(flySpeed)
+end)
+
+Text(MovementFrame, "20", UDim2.new(0, 30, 0, 18), UDim2.new(0, 18, 0, 270), Enum.Font.Gotham, 8, T.Muted)
+Text(MovementFrame, "700", UDim2.new(0, 40, 0, 18), UDim2.new(0, 330, 0, 270), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right)
 
 local FlyBtn = Instance.new("TextButton")
-FlyBtn.Size = UDim2.new(0, 170, 0, 42)
-FlyBtn.Position = UDim2.new(0, 18, 0, 298)
+FlyBtn.Size = UDim2.new(0, 352, 0, 42)
+FlyBtn.Position = UDim2.new(0, 18, 0, 302)
 FlyBtn.BackgroundColor3 = T.Navy
 FlyBtn.BorderSizePixel = 0
 FlyBtn.Text = "FLY: OFF"
@@ -3442,66 +3479,13 @@ FlyBtn.Parent = MovementFrame
 Corner(FlyBtn, 9)
 Stroke(FlyBtn, T.Border, 0.2)
 
-local FlyMinus = Instance.new("TextButton")
-FlyMinus.Size = UDim2.new(0, 42, 0, 42)
-FlyMinus.Position = UDim2.new(0, 200, 0, 298)
-FlyMinus.BackgroundColor3 = T.Navy
-FlyMinus.BorderSizePixel = 0
-FlyMinus.Text = "-"
-FlyMinus.TextColor3 = T.Muted
-FlyMinus.TextSize = 16
-FlyMinus.Font = Enum.Font.GothamBold
-FlyMinus.Parent = MovementFrame
-Corner(FlyMinus, 9)
-
-local FlySpeedText = Text(
-    MovementFrame,
-    tostring(flySpeed),
-    UDim2.new(0, 70, 0, 42),
-    UDim2.new(0, 248, 0, 298),
-    Enum.Font.GothamBold,
-    13,
-    T.BlueSoft,
-    Enum.TextXAlignment.Center
-)
-
-local FlyPlus = Instance.new("TextButton")
-FlyPlus.Size = UDim2.new(0, 42, 0, 42)
-FlyPlus.Position = UDim2.new(0, 326, 0, 298)
-FlyPlus.BackgroundColor3 = T.Navy
-FlyPlus.BorderSizePixel = 0
-FlyPlus.Text = "+"
-FlyPlus.TextColor3 = T.BlueSoft
-FlyPlus.TextSize = 16
-FlyPlus.Font = Enum.Font.GothamBold
-FlyPlus.Parent = MovementFrame
-Corner(FlyPlus, 9)
-
 FlyBtn.MouseButton1Click:Connect(function()
     StartFly()
     FlyBtn.Text = flying and "FLY: ON" or "FLY: OFF"
     FlyBtn.TextColor3 = flying and T.Green or T.Muted
 end)
 
-FlyMinus.MouseButton1Click:Connect(function()
-    flySpeed = math.clamp(flySpeed - 10, 20, 700)
-    FlySpeedText.Text = tostring(flySpeed)
-end)
-
-FlyPlus.MouseButton1Click:Connect(function()
-    flySpeed = math.clamp(flySpeed + 10, 20, 700)
-    FlySpeedText.Text = tostring(flySpeed)
-end)
-
-Text(
-    MovementFrame,
-    "WASD = move   SPACE = up   LEFT CTRL = down",
-    UDim2.new(1, -36, 0, 18),
-    UDim2.new(0, 18, 0, 350),
-    Enum.Font.Gotham,
-    9,
-    T.Muted
-)
+Text(MovementFrame, "WASD = move   SPACE = up   LEFT CTRL = down", UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 354), Enum.Font.Gotham, 9, T.Muted)
 
 MovementClose.MouseButton1Click:Connect(function()
     MovementFrame.Visible = false
@@ -4149,8 +4133,11 @@ end)
 MovementBtn.MouseButton1Click:Connect(function()
     MenuOpen = false
     MainMenu.Visible = false
-    MovementFrame.Visible = true
     SpeedValue.Text = tostring(walkSpeedValue)
+    FlySpeedText.Text = tostring(flySpeed)
+    SetWalkSliderVisual(walkSpeedValue)
+    SetFlySliderVisual(flySpeed)
+    MovementFrame.Visible = true
 end)
 
 ProfilesBtn.MouseButton1Click:Connect(function()
@@ -4316,6 +4303,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     local aimEnabled = false
     local aimHolding = false
     local aimFOVRadius = 150
+    local aimMaxDistanceMeters = 700
     local aimSmoothness = 1.0
     local aimTargetPart = "Head"
     local lockedTarget = nil
@@ -4431,6 +4419,14 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         local camera = workspace.CurrentCamera
         local part = GetTargetPart(target)
         if not camera or not part then return false, math.huge end
+
+        local myRoot = GetRoot()
+        if myRoot then
+            local meters = (myRoot.Position - part.Position).Magnitude * STUD_TO_METER
+            if meters > aimMaxDistanceMeters then
+                return false, math.huge
+            end
+        end
 
         local point, visible = camera:WorldToViewportPoint(part.Position)
         if not visible or point.Z <= 0 then return false, math.huge end
@@ -4579,6 +4575,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         return {
             Enabled = aimEnabled == true,
             FOV = aimFOVRadius,
+            MaxDistance = aimMaxDistanceMeters,
             Smoothness = aimSmoothness,
             TargetPart = aimTargetPart,
         }
@@ -4590,6 +4587,10 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         if tonumber(state.FOV) then
             aimFOVRadius = math.clamp(tonumber(state.FOV), 60, 400)
             FOVCircle.Size = UDim2.new(0, aimFOVRadius * 2, 0, aimFOVRadius * 2)
+        end
+
+        if tonumber(state.MaxDistance) then
+            aimMaxDistanceMeters = math.clamp(tonumber(state.MaxDistance), 5, 700)
         end
 
         if tonumber(state.Smoothness) then
@@ -4616,7 +4617,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     local AimSettingsFrame = Instance.new("Frame")
     AimSettingsFrame.Name = "AimSettings"
     AimSettingsFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-    AimSettingsFrame.Size = UDim2.new(0, 430, 0, 330)
+    AimSettingsFrame.Size = UDim2.new(0, 430, 0, 410)
     AimSettingsFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     AimSettingsFrame.BackgroundColor3 = T.Black
     AimSettingsFrame.BorderSizePixel = 0
@@ -4626,17 +4627,8 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     Corner(AimSettingsFrame, 14)
     Stroke(AimSettingsFrame, T.Border, 0.03)
 
-    Text(
-        AimSettingsFrame, "AIM SETTINGS",
-        UDim2.new(1, -70, 0, 28), UDim2.new(0, 18, 0, 14),
-        Enum.Font.GothamBold, 16, T.Text
-    ).ZIndex = 141
-
-    Text(
-        AimSettingsFrame, "Hold Right Mouse Button • green ring = locked",
-        UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 42),
-        Enum.Font.Gotham, 9, T.Muted
-    ).ZIndex = 141
+    Text(AimSettingsFrame, "AIM SETTINGS", UDim2.new(1, -70, 0, 28), UDim2.new(0, 18, 0, 14), Enum.Font.GothamBold, 16, T.Text).ZIndex = 141
+    Text(AimSettingsFrame, "Hold Right Mouse Button • green ring = locked", UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 42), Enum.Font.Gotham, 9, T.Muted).ZIndex = 141
 
     local AimClose = Instance.new("TextButton")
     AimClose.Size = UDim2.new(0, 32, 0, 32)
@@ -4651,7 +4643,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     AimClose.Parent = AimSettingsFrame
     Corner(AimClose, 8)
 
-    local function OptionButton(label, x, y, width)
+    local function AimOptionButton(label, x, y, width)
         local button = Instance.new("TextButton")
         button.Size = UDim2.new(0, width, 0, 36)
         button.Position = UDim2.new(0, x, 0, y)
@@ -4668,58 +4660,129 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         return button
     end
 
-    Text(
-        AimSettingsFrame, "FOV SIZE",
-        UDim2.new(0, 130, 0, 20), UDim2.new(0, 18, 0, 80),
-        Enum.Font.GothamBold, 10, T.Muted
-    ).ZIndex = 141
+    local function AimSlider(y, minValue, maxValue, initialValue, onChanged)
+        local track = Instance.new("Frame")
+        track.Size = UDim2.new(0, 352, 0, 8)
+        track.Position = UDim2.new(0, 18, 0, y)
+        track.BackgroundColor3 = T.Navy2
+        track.BorderSizePixel = 0
+        track.ZIndex = 141
+        track.Parent = AimSettingsFrame
+        Corner(track, 4)
 
-    local F100 = OptionButton("100", 18, 106, 88)
-    local F150 = OptionButton("150", 112, 106, 88)
-    local F200 = OptionButton("200", 206, 106, 88)
-    local F250 = OptionButton("250", 300, 106, 88)
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new(0, 0, 1, 0)
+        fill.BackgroundColor3 = T.Blue
+        fill.BorderSizePixel = 0
+        fill.ZIndex = 142
+        fill.Parent = track
+        Corner(fill, 4)
 
-    local function SetFOV(value)
-        aimFOVRadius = value
-        FOVCircle.Size = UDim2.new(0, value * 2, 0, value * 2)
-        ClearTarget()
+        local knob = Instance.new("TextButton")
+        knob.AnchorPoint = Vector2.new(0.5, 0.5)
+        knob.Size = UDim2.new(0, 18, 0, 18)
+        knob.Position = UDim2.new(0, 0, 0.5, 0)
+        knob.BackgroundColor3 = T.BlueSoft
+        knob.BorderSizePixel = 0
+        knob.Text = ""
+        knob.AutoButtonColor = false
+        knob.ZIndex = 143
+        knob.Parent = track
+        Corner(knob, 9)
+
+        local dragging = false
+
+        local function setFromX(x)
+            local width = math.max(track.AbsoluteSize.X, 1)
+            local alpha = math.clamp((x - track.AbsolutePosition.X) / width, 0, 1)
+            local value = math.floor(minValue + (maxValue - minValue) * alpha + 0.5)
+            fill.Size = UDim2.new(alpha, 0, 1, 0)
+            knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+            onChanged(value)
+        end
+
+        local function setValue(value)
+            value = math.clamp(tonumber(value) or minValue, minValue, maxValue)
+            local alpha = (value - minValue) / (maxValue - minValue)
+            fill.Size = UDim2.new(alpha, 0, 1, 0)
+            knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+        end
+
+        track.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                setFromX(input.Position.X)
+            end
+        end)
+
+        knob.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                setFromX(input.Position.X)
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (
+                input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch
+            ) then
+                setFromX(input.Position.X)
+            end
+        end)
+
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+
+        setValue(initialValue)
+        return setValue
     end
 
-    F100.MouseButton1Click:Connect(function() SetFOV(100) end)
-    F150.MouseButton1Click:Connect(function() SetFOV(150) end)
-    F200.MouseButton1Click:Connect(function() SetFOV(200) end)
-    F250.MouseButton1Click:Connect(function() SetFOV(250) end)
+    Text(AimSettingsFrame, "FOV SIZE", UDim2.new(0, 130, 0, 20), UDim2.new(0, 18, 0, 76), Enum.Font.GothamBold, 10, T.Muted).ZIndex = 141
+    local FOVValueText = Text(AimSettingsFrame, tostring(aimFOVRadius), UDim2.new(0, 80, 0, 20), UDim2.new(1, -98, 0, 76), Enum.Font.GothamBold, 13, T.BlueSoft, Enum.TextXAlignment.Right)
+    FOVValueText.ZIndex = 141
 
-    Text(
-        AimSettingsFrame, "LOCK STRENGTH",
-        UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 160),
-        Enum.Font.GothamBold, 10, T.Muted
-    ).ZIndex = 141
-
-    local InstantButton = OptionButton("INSTANT", 18, 186, 118)
-    local StrongButton = OptionButton("STRONG", 146, 186, 118)
-    local SmoothButton = OptionButton("SMOOTH", 274, 186, 118)
-
-    InstantButton.MouseButton1Click:Connect(function()
-        aimSmoothness = 1.0
+    local SetFOVSliderVisual = AimSlider(108, 60, 400, aimFOVRadius, function(value)
+        aimFOVRadius = value
+        FOVCircle.Size = UDim2.new(0, value * 2, 0, value * 2)
+        FOVValueText.Text = tostring(value)
+        ClearTarget()
     end)
 
-    StrongButton.MouseButton1Click:Connect(function()
-        aimSmoothness = 0.55
+    Text(AimSettingsFrame, "60", UDim2.new(0, 30, 0, 16), UDim2.new(0, 18, 0, 120), Enum.Font.Gotham, 8, T.Muted).ZIndex = 141
+    Text(AimSettingsFrame, "400", UDim2.new(0, 40, 0, 16), UDim2.new(0, 330, 0, 120), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right).ZIndex = 141
+
+    Text(AimSettingsFrame, "AIM DISTANCE", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 148), Enum.Font.GothamBold, 10, T.Muted).ZIndex = 141
+    local AimDistanceValueText = Text(AimSettingsFrame, tostring(aimMaxDistanceMeters) .. " m", UDim2.new(0, 100, 0, 20), UDim2.new(1, -118, 0, 148), Enum.Font.GothamBold, 13, T.BlueSoft, Enum.TextXAlignment.Right)
+    AimDistanceValueText.ZIndex = 141
+
+    local SetAimDistanceSliderVisual = AimSlider(180, 5, 700, aimMaxDistanceMeters, function(value)
+        aimMaxDistanceMeters = value
+        AimDistanceValueText.Text = tostring(value) .. " m"
+        ClearTarget()
     end)
 
-    SmoothButton.MouseButton1Click:Connect(function()
-        aimSmoothness = 0.20
-    end)
+    Text(AimSettingsFrame, "5 m", UDim2.new(0, 40, 0, 16), UDim2.new(0, 18, 0, 192), Enum.Font.Gotham, 8, T.Muted).ZIndex = 141
+    Text(AimSettingsFrame, "700 m", UDim2.new(0, 50, 0, 16), UDim2.new(0, 320, 0, 192), Enum.Font.Gotham, 8, T.Muted, Enum.TextXAlignment.Right).ZIndex = 141
 
-    Text(
-        AimSettingsFrame, "TARGET",
-        UDim2.new(0, 100, 0, 20), UDim2.new(0, 18, 0, 240),
-        Enum.Font.GothamBold, 10, T.Muted
-    ).ZIndex = 141
+    Text(AimSettingsFrame, "LOCK STRENGTH", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 220), Enum.Font.GothamBold, 10, T.Muted).ZIndex = 141
+    local InstantButton = AimOptionButton("INSTANT", 18, 246, 118)
+    local StrongButton = AimOptionButton("STRONG", 146, 246, 118)
+    local SmoothButton = AimOptionButton("SMOOTH", 274, 246, 118)
 
-    local HeadButton = OptionButton("HEAD", 18, 266, 185)
-    local BodyButton = OptionButton("BODY", 213, 266, 185)
+    InstantButton.MouseButton1Click:Connect(function() aimSmoothness = 1.0 end)
+    StrongButton.MouseButton1Click:Connect(function() aimSmoothness = 0.55 end)
+    SmoothButton.MouseButton1Click:Connect(function() aimSmoothness = 0.20 end)
+
+    Text(AimSettingsFrame, "TARGET", UDim2.new(0, 100, 0, 20), UDim2.new(0, 18, 0, 300), Enum.Font.GothamBold, 10, T.Muted).ZIndex = 141
+    local HeadButton = AimOptionButton("HEAD", 18, 326, 185)
+    local BodyButton = AimOptionButton("BODY", 213, 326, 185)
 
     HeadButton.MouseButton1Click:Connect(function()
         aimTargetPart = "Head"
@@ -4744,6 +4807,10 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     AimSettingsBtn.MouseButton1Click:Connect(function()
         MenuOpen = false
         MainMenu.Visible = false
+        FOVValueText.Text = tostring(aimFOVRadius)
+        AimDistanceValueText.Text = tostring(aimMaxDistanceMeters) .. " m"
+        SetFOVSliderVisual(aimFOVRadius)
+        SetAimDistanceSliderVisual(aimMaxDistanceMeters)
         AimSettingsFrame.Visible = true
     end)
 
