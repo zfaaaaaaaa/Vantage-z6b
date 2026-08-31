@@ -11,9 +11,50 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local HttpService = game:GetService("HttpService")
-local Stats = game:GetService("Stats")
 
 local LocalPlayer = Players.LocalPlayer
+
+
+-- ============================================
+-- HARD SINGLE-INSTANCE CLEANUP
+-- Removes every old VANTAGE/Recorder ScreenGui before this run starts.
+-- ============================================
+pcall(function()
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+    for _, child in ipairs(playerGui:GetChildren()) do
+        if child:IsA("ScreenGui") then
+            local n = string.lower(child.Name)
+            if n == "vantagerecorderui"
+                or n == "vantagelicensegate"
+                or n == "vantageaimoverlay"
+                or n == "recorderui"
+                or string.find(n, "vantage", 1, true)
+            then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+
+    -- In case an older build parented one of these directly under PlayerGui.
+    local directNames = {
+        "MainMenu", "RecordingLibrary", "PlayerList", "MovementFrame",
+        "LocationsFrame", "ProfilesFrame", "AimSettings", "ESPColorFrame",
+        "PerformanceHUD"
+    }
+    for _, guiName in ipairs(directNames) do
+        local obj = playerGui:FindFirstChild(guiName)
+        if obj then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+end)
+
+-- Global run token. New executions invalidate the previous run's delayed tasks.
+pcall(function()
+    local env = (getgenv and getgenv()) or _G
+    env.__VANTAGE_RUN_ID = (tonumber(env.__VANTAGE_RUN_ID) or 0) + 1
+end)
 
 -- ============================================
 
@@ -257,6 +298,7 @@ local function LoadLocationsFile()
 end
 
 local function SaveCurrentLocation(name, exactCFrame)
+    VantageLogger.Send("تم حفظ الموقع", "تم حفظ الموقع الحالي بنجاح.", "LOCATION")
     name = SanitizeLocationName(name)
     if not name then
         warn("VANTAGE: Invalid location name.")
@@ -286,6 +328,7 @@ local function SaveCurrentLocation(name, exactCFrame)
 end
 
 local function TeleportToLocation(name)
+    VantageLogger.Send("انتقال إلى موقع محفوظ", "الموقع: **" .. tostring(name) .. "**", "LOCATION")
     local data = savedLocations[name]
     local root = GetRoot()
 
@@ -348,17 +391,28 @@ local function StopSpeedBoost()
         speedBoostConnection:Disconnect()
         speedBoostConnection = nil
     end
+
+    local humanoid = GetHumanoid()
+    if humanoid then
+        humanoid.WalkSpeed = DEFAULT_WALK_SPEED
+    end
 end
 
 local function ApplyWalkSpeed()
     local humanoid = GetHumanoid()
     if humanoid then
-        humanoid.WalkSpeed = walkSpeedValue
+        humanoid.WalkSpeed = speedBoostConnection and walkSpeedValue or DEFAULT_WALK_SPEED
     end
 end
 
 local function StartSpeedBoost()
-    StopSpeedBoost()
+    -- Same behavior style as Fly: calling while ON turns it OFF.
+    if speedBoostConnection then
+        StopSpeedBoost()
+        return
+    end
+
+    ApplyWalkSpeed()
 
     speedBoostConnection = RunService.Heartbeat:Connect(function()
         local humanoid = GetHumanoid()
@@ -368,20 +422,15 @@ local function StartSpeedBoost()
             return
         end
 
-        -- Keep the Roblox property synced too.
         humanoid.WalkSpeed = walkSpeedValue
 
         local direction = humanoid.MoveDirection
         if direction.Magnitude > 0.01 then
-            local currentVelocity = root.AssemblyLinearVelocity
-
-            -- Strong horizontal movement boost.
-            -- Preserve vertical velocity so jumping/falling still works normally.
-            local targetSpeed = math.max(0, walkSpeedValue)
+            local velocity = root.AssemblyLinearVelocity
             root.AssemblyLinearVelocity = Vector3.new(
-                direction.X * targetSpeed,
-                currentVelocity.Y,
-                direction.Z * targetSpeed
+                direction.X * walkSpeedValue,
+                velocity.Y,
+                direction.Z * walkSpeedValue
             )
         end
     end)
@@ -389,14 +438,12 @@ end
 
 local function SetWalkSpeed(value)
     walkSpeedValue = math.clamp(tonumber(value) or DEFAULT_WALK_SPEED, 8, 3000)
-    ApplyWalkSpeed()
 
-    if not speedBoostConnection then
-        StartSpeedBoost()
+    -- Changing the slider NEVER enables speed automatically.
+    if speedBoostConnection then
+        ApplyWalkSpeed()
     end
 end
-
-StartSpeedBoost()
 
 local function StopAntiFall()
     if antiFallConnection then
@@ -652,6 +699,7 @@ local function CaptureCurrentProfile()
 end
 
 local function SaveProfile(name)
+    VantageLogger.Send("تم حفظ الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
     name = SanitizeProfileName(name)
     if not name then return false end
 
@@ -669,6 +717,7 @@ end
 local ApplyProfile
 
 local function DeleteProfile(name)
+    VantageLogger.Send("تم حذف الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
     if not savedProfiles[name] then return false end
     savedProfiles[name] = nil
     if activeProfileName == name then
@@ -829,13 +878,19 @@ local function StartRecording()
 
     startPosition = root.Position
 
-    recordedData = {}
+    recordedData = {
+        {
+            CFrame = {root.CFrame:GetComponents()},
+            Position = {X = root.Position.X, Y = root.Position.Y, Z = root.Position.Z},
+            Time = 0
+        }
+    }
 
-    lastPos = nil
-
-    lastTime = nil
+    lastPos = root.CFrame
+    lastTime = tick()
 
     recording = true
+    VantageLogger.Send("بدأ التسجيل", "بدأ تسجيل الحركة.", "RECORD")
 
     print("Recording started.")
 
@@ -850,6 +905,7 @@ end
 local function StopRecording()
 
     recording = false
+    VantageLogger.Send("توقف التسجيل", "عدد الإطارات المسجلة: **" .. tostring(#recordedData) .. "**", "RECORD")
 
     if #recordedData == 0 then
 
@@ -885,7 +941,11 @@ local function StopRecording()
 
         Date = os.date("%Y-%m-%d %H:%M:%S"),
 
-        Count = #recordedData
+        Count = #recordedData,
+
+        PlaybackSpeed = 1.0,
+
+        PlaybackSpeedEnabled = false
 
     }
 
@@ -921,150 +981,126 @@ end
 
 -- ============================================
 
-local function PlayRecording(name)
+VantageRecordingFrame = VantageRecordingFrame or {}
 
+function VantageRecordingFrame.Apply(rootPart, move)
+    if not rootPart or type(move) ~= "table" then
+        return false
+    end
+
+    local cf = move.CFrame or move.cframe
+    if type(cf) == "table" and #cf >= 12 then
+        rootPart.CFrame = CFrame.new(
+            tonumber(cf[1]) or 0, tonumber(cf[2]) or 0, tonumber(cf[3]) or 0,
+            tonumber(cf[4]) or 1, tonumber(cf[5]) or 0, tonumber(cf[6]) or 0,
+            tonumber(cf[7]) or 0, tonumber(cf[8]) or 1, tonumber(cf[9]) or 0,
+            tonumber(cf[10]) or 0, tonumber(cf[11]) or 0, tonumber(cf[12]) or 1
+        )
+        return true
+    end
+
+    local pos = move.Position or move.position or move.Pos or move.pos
+    if type(pos) == "table" then
+        local x = tonumber(pos.X or pos.x or pos[1])
+        local y = tonumber(pos.Y or pos.y or pos[2])
+        local z = tonumber(pos.Z or pos.z or pos[3])
+        if x and y and z then
+            -- Legacy playback: exact saved position. No added Y offset.
+            rootPart.CFrame = CFrame.new(x, y, z)
+            return true
+        end
+    end
+
+    return false
+end
+
+local function PlayRecording(name)
     local data = recordingsList[name]
 
     if not data then
-
         print("❌ ما فيه ريكورد بإسم: " .. tostring(name))
-
         return
-
     end
 
     if loopPlaying then
-
         print("⚠️ أوقف الLOOP أولاً")
-
         return
-
     end
 
     if playing then
-
         playing = false
-
         task.wait(0.1)
-
     end
 
-    if type(data.Movements) ~= "table" then
-
-        print("❌ الريكورد القديم ما فيه Movements صالحة")
-
-        return
-
-    end
-
-    if #data.Movements == 0 then
-
+    if type(data.Movements) ~= "table" or #data.Movements == 0 then
         print("ERROR: Recording is empty.")
-
         return
-
     end
 
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-
     local root = char:WaitForChild("HumanoidRootPart", 10)
 
     if not root then
-
         print("ERROR: HumanoidRootPart not found.")
-
         return
-
     end
 
-    -- دعم صيغ StartPosition القديمة والجديدة
-
-    if data.StartPosition then
-
-        local startPos = data.StartPosition
-
-        local x = tonumber(startPos.X or startPos.x or startPos[1])
-
-        local y = tonumber(startPos.Y or startPos.y or startPos[2])
-
-        local z = tonumber(startPos.Z or startPos.z or startPos[3])
+    -- Exact first frame. Old recordings fall back to StartPosition.
+    if not VantageRecordingFrame.Apply(root, data.Movements[1]) and data.StartPosition then
+        local p = data.StartPosition
+        local x = tonumber(p.X or p.x or p[1])
+        local y = tonumber(p.Y or p.y or p[2])
+        local z = tonumber(p.Z or p.z or p[3])
 
         if x and y and z then
-
-            root.CFrame = CFrame.new(x, y + 3, z)
-
-            task.wait(0.15)
-
+            root.CFrame = CFrame.new(x, y, z)
         end
-
     end
 
     playing = true
-
-    print("▶️ PLAY: " .. tostring(name) .. " | الحركات: " .. tostring(#data.Movements))
+    VantageLogger.Send("بدأ تشغيل التسجيل", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
+    print("▶️ PLAY EXACT: " .. tostring(name) .. " | الحركات: " .. tostring(#data.Movements))
 
     task.spawn(function()
-
         for index, move in ipairs(data.Movements) do
+            if not playing then
+                break
+            end
+
+            -- Time belongs BEFORE the current frame:
+            -- if you stood still for 2 seconds, playback also waits 2 seconds
+            -- before doing the next movement.
+            if index > 1 then
+                local waitTime = tonumber(move.Time or move.time or move.Delay or move.delay) or 0.03
+                local playbackMultiplier = 1
+
+                if data.PlaybackSpeedEnabled == true then
+                    playbackMultiplier = math.clamp(tonumber(data.PlaybackSpeed) or 1, 0.10, 20)
+                end
+
+                task.wait(math.clamp(waitTime / playbackMultiplier, 0.001, 2.00))
+            end
 
             if not playing then
-
                 break
-
             end
 
             local charNow = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-
             local rootNow = charNow:WaitForChild("HumanoidRootPart", 10)
 
             if not rootNow then
-
                 print("ERROR: HumanoidRootPart disappeared.")
-
                 break
-
             end
 
-            local pos = move.Position or move.position or move.Pos or move.pos
-
-            if pos then
-
-                local x = tonumber(pos.X or pos.x or pos[1])
-
-                local y = tonumber(pos.Y or pos.y or pos[2])
-
-                local z = tonumber(pos.Z or pos.z or pos[3])
-
-                if x and y and z then
-
-                    rootNow.CFrame = CFrame.new(x, y + 3, z)
-
-                else
-
-                    print("⚠️ حركة رقم " .. tostring(index) .. " إحداثياتها غير صالحة")
-
-                end
-
-            else
-
-                print("⚠️ حركة رقم " .. tostring(index) .. " ما فيها Position")
-
+            if not VantageRecordingFrame.Apply(rootNow, move) then
+                print("⚠️ حركة رقم " .. tostring(index) .. " غير صالحة")
             end
-
-            local waitTime = tonumber(move.Time or move.time or move.Delay or move.delay) or 0.03
-
-            waitTime = math.clamp(waitTime, 0.01, 0.25)
-
-            task.wait(waitTime)
-
         end
 
         playing = false
-
         print("✅ انتهى PLAY الريكورد")
-
     end)
-
 end
 
 -- ============================================
@@ -1112,195 +1148,95 @@ end
 -- ============================================
 
 local function StartLoopPlay(name)
-
     local data = recordingsList[name]
 
     if not data then
-
-        print("❌ ما فيه ريكورد بإسم: " .. name)
-
+        print("❌ ما فيه ريكورد بإسم: " .. tostring(name))
         return
-
     end
 
     if loopPlaying then
-
         loopPlaying = false
-
         LoopBtn.Text = "↻ LOOP PLAYBACK"
-
         LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
-
         LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
-
-        print("⏹️ تم إيقاف الPLAY المتكرر")
-
         return
+    end
 
+    if type(data.Movements) ~= "table" or #data.Movements == 0 then
+        print("ERROR: Recording is empty.")
+        return
     end
 
     currentLoopName = name
-
     loopPlaying = true
+    VantageLogger.Send("بدأ التشغيل المتكرر", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
 
     LoopBtn.Text = "■ STOP LOOP"
-
     LoopBtn.BackgroundColor3 = Color3.fromRGB(55, 22, 29)
-
     LoopBtn.BorderColor3 = Color3.fromRGB(220, 76, 88)
 
-    print("🔄 بدأ الLOOP اللانهائي: " .. name)
-
     task.spawn(function()
-
         while loopPlaying do
-
             local dataNow = recordingsList[currentLoopName]
 
-            if not dataNow then
-
-                print("ERROR: Recording not found.")
-
-                loopPlaying = false
-
+            if not dataNow or type(dataNow.Movements) ~= "table" or #dataNow.Movements == 0 then
                 break
-
             end
 
-            -- انتظر الشخصية بدل ما نوقف الLOOP
-
-            local char = LocalPlayer.Character
-
-            while loopPlaying and not char do
-
-                task.wait(0.1)
-
-                char = LocalPlayer.Character
-
-            end
-
-            if not loopPlaying then
-
-                break
-
-            end
-
-            -- انتظر HumanoidRootPart بدل ما نوقف الLOOP
-
-            local root = char:FindFirstChild("HumanoidRootPart")
-
-            while loopPlaying and not root do
-
-                task.wait(0.1)
-
-                char = LocalPlayer.Character
-
-                if char then
-
-                    root = char:FindFirstChild("HumanoidRootPart")
-
+            for index, move in ipairs(dataNow.Movements) do
+                if not loopPlaying then
+                    break
                 end
 
-            end
+                if index > 1 then
+                    local waitTime = tonumber(move.Time or move.time or move.Delay or move.delay) or 0.03
+                    local playbackMultiplier = 1
 
-            if not loopPlaying then
+                    if dataNow.PlaybackSpeedEnabled == true then
+                        playbackMultiplier = math.clamp(tonumber(dataNow.PlaybackSpeed) or 1, 0.10, 20)
+                    end
 
-                break
-
-            end
-
-            -- يرجع لنقطة بداية الريكورد في كل دورة
-
-            local startPos = dataNow.StartPosition
-
-            root.CFrame = CFrame.new(
-
-                Vector3.new(startPos.X, startPos.Y, startPos.Z) + Vector3.new(0, 3, 0)
-
-            )
-
-            task.wait(0.05)
-
-            for _, move in ipairs(dataNow.Movements) do
+                    task.wait(math.clamp(waitTime / playbackMultiplier, 0.001, 2.00))
+                end
 
                 if not loopPlaying then
-
                     break
-
                 end
 
                 local charNow = LocalPlayer.Character
-
                 while loopPlaying and not charNow do
-
                     task.wait(0.1)
-
                     charNow = LocalPlayer.Character
-
                 end
 
-                if not loopPlaying then
-
-                    break
-
-                end
+                if not loopPlaying then break end
 
                 local rootNow = charNow:FindFirstChild("HumanoidRootPart")
-
                 while loopPlaying and not rootNow do
-
                     task.wait(0.1)
-
                     charNow = LocalPlayer.Character
-
                     if charNow then
-
                         rootNow = charNow:FindFirstChild("HumanoidRootPart")
-
                     end
-
                 end
 
-                if not loopPlaying then
+                if not loopPlaying then break end
 
-                    break
-
-                end
-
-                local pos = move.Position
-
-                rootNow.CFrame = CFrame.new(
-
-                    Vector3.new(pos.X, pos.Y, pos.Z) + Vector3.new(0, 3, 0)
-
-                )
-
-                task.wait(math.max(tonumber(move.Time) or 0.03, 0.01))
-
+                VantageRecordingFrame.Apply(rootNow, move)
             end
-
-            -- طالما loopPlaying = true يبدأ دورة جديدة مباشرة
 
             if loopPlaying then
-
-                task.wait(0.05)
-
+                task.wait(0.01)
             end
-
         end
 
         loopPlaying = false
-
         LoopBtn.Text = "↻ LOOP PLAYBACK"
-
         LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
-
         LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
-
         print("⏹️ انتهى الLOOP")
-
     end)
-
 end
 
 -- ============================================
@@ -1359,6 +1295,7 @@ local function GetPlayerHumanoid(player)
 end
 
 local function TeleportToPlayer(player)
+    VantageLogger.Send("انتقال إلى لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
     local myRoot = GetRoot()
     local targetRoot = GetPlayerRoot(player)
     if not myRoot or not targetRoot then
@@ -1369,6 +1306,7 @@ local function TeleportToPlayer(player)
 end
 
 local function StopSpectate()
+    VantageLogger.Send("تم إيقاف المشاهدة", "تمت إعادة الكاميرا إلى اللاعب المحلي.", "PLAYER")
     spectatingPlayer = nil
 
     if spectateConnection then
@@ -1388,6 +1326,7 @@ local function StopSpectate()
 end
 
 local function StartSpectate(player)
+    VantageLogger.Send("بدأت مشاهدة لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
     if not player or player == LocalPlayer then
         StopSpectate()
         return
@@ -2723,9 +2662,771 @@ ScreenGui.Name = "VantageRecorderUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Enabled = true
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
+-- Keep exactly this ScreenGui alive. Older async runs sometimes recreate a
+-- second menu after the initial cleanup, so sweep duplicates for a few seconds.
+pcall(function()
+    local env = (getgenv and getgenv()) or _G
+    env.__VANTAGE_CURRENT_GUI = ScreenGui
+
+    task.spawn(function()
+        for _ = 1, 20 do
+            task.wait(0.25)
+            if not ScreenGui or not ScreenGui.Parent then return end
+
+            local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+            if not playerGui then return end
+
+            for _, child in ipairs(playerGui:GetChildren()) do
+                if child:IsA("ScreenGui") and child ~= ScreenGui then
+                    local n = string.lower(child.Name)
+                    if n == "vantagerecorderui"
+                        or n == "recorderui"
+                        or string.find(n, "vantage", 1, true)
+                    then
+                        pcall(function() child:Destroy() end)
+                    end
+                end
+            end
+        end
+    end)
+end)
+
 local TweenService = game:GetService("TweenService")
+
+-- ============================================
+-- VANTAGE ACTIVITY LOGGER
+-- Activity only. No IP/device/private-file collection.
+-- ============================================
+
+VantageLogger = VantageLogger or {
+    Enabled = true,
+    SessionId = HttpService:GenerateGUID(false):sub(1, 8),
+    StartedAt = os.time(),
+    LastSent = 0,
+    Queue = {},
+    Sending = false,
+    Counts = {},
+}
+
+-- Webhook is server-side only. The client sends activity to the VANTAGE backend.
+function VantageLogger.Request(payload)
+    -- Logging must NEVER block or break the VANTAGE UI.
+    if not VantageLogger.Enabled then return false end
+    if type(VantageLicense) ~= "table" or type(VantageLicense.ApiBase) ~= "string" or VantageLicense.ApiBase == "" then
+        return false
+    end
+
+    local requestFn = request or http_request or (syn and syn.request)
+    if not requestFn then return false end
+
+    local headers = {["Content-Type"] = "application/json"}
+    if VantageLicense.SessionToken then
+        headers["Authorization"] = "Bearer " .. tostring(VantageLicense.SessionToken)
+    end
+
+    local ok, response = pcall(function()
+        return requestFn({
+            Url = VantageLicense.ApiBase .. "/v1/activity/log",
+            Method = "POST",
+            Headers = headers,
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
+
+    if not ok or type(response) ~= "table" then return false end
+    local status = tonumber(response.StatusCode or response.Status or 0) or 0
+    return status >= 200 and status < 300
+end
+
+function VantageLogger.GetGameName()
+    local ok, info = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+
+    if ok and type(info) == "table" and info.Name then
+        return tostring(info.Name)
+    end
+
+    local fallback = tostring(game.Name or "")
+    if fallback ~= "" and fallback ~= "Game" then
+        return fallback
+    end
+
+    return "لعبة غير معروفة"
+end
+
+function VantageLogger.GetPlayerCount()
+    return tostring(#Players:GetPlayers()) .. " / " .. tostring(Players.MaxPlayers)
+end
+
+function VantageLogger.BaseFields()
+    return {
+        {name = "اللاعب", value = LocalPlayer.DisplayName .. "  (@" .. LocalPlayer.Name .. ")", inline = true},
+        {name = "معرف المستخدم", value = tostring(LocalPlayer.UserId), inline = true},
+        {name = "الجلسة", value = tostring(VantageLogger.SessionId), inline = true},
+        {name = "اللعبة / السيرفر", value = VantageLogger.GetGameName(), inline = true},
+        {name = "عدد اللاعبين", value = VantageLogger.GetPlayerCount(), inline = true},
+        {name = "معرف المكان", value = tostring(game.PlaceId), inline = true},
+        {name = "معرف السيرفر", value = (game.JobId ~= "" and game.JobId or "غير معروف"), inline = false},
+    }
+end
+
+function VantageLogger.Send(title, description, category)
+    if not VantageLogger.Enabled then
+        return
+    end
+
+    category = tostring(category or "GENERAL")
+    VantageLogger.Counts[category] = (VantageLogger.Counts[category] or 0) + 1
+
+    if #VantageLogger.Queue >= 100 then
+        table.remove(VantageLogger.Queue, 1)
+    end
+
+    table.insert(VantageLogger.Queue, {
+        username = "سجل VANTAGE",
+        embeds = {{
+            title = "VANTAGE • " .. tostring(title or "سجل"),
+            description = tostring(description or "لا توجد تفاصيل"),
+            color = 9515775,
+            fields = VantageLogger.BaseFields(),
+            footer = {
+                text = "سجل نشاط VANTAGE • " .. os.date("%Y-%m-%d %H:%M:%S")
+            }
+        }}
+    })
+
+    if VantageLogger.Sending then
+        return
+    end
+
+    VantageLogger.Sending = true
+    task.spawn(function()
+        while #VantageLogger.Queue > 0 do
+            local delay = 0.75 - (os.clock() - (VantageLogger.LastSent or 0))
+            if delay > 0 then
+                task.wait(delay)
+            end
+
+            local payload = table.remove(VantageLogger.Queue, 1)
+            local delivered = false
+
+            for attempt = 1, 3 do
+                if VantageLogger.Request(payload) then
+                    delivered = true
+                    break
+                end
+                task.wait(0.75 * attempt)
+            end
+
+            if not delivered then
+                warn("VANTAGE LOGGER: تعذر إرسال السجل بعد 3 محاولات")
+            end
+
+            VantageLogger.LastSent = os.clock()
+        end
+
+        VantageLogger.Sending = false
+    end)
+end
+
+function VantageLogger.SessionSummary(reason)
+    local parts = {}
+    local categoryNames = {
+        GENERAL = "عام",
+        SESSION = "الجلسة",
+        LOCATION = "المواقع",
+        PROFILE = "الملفات الشخصية",
+        RECORD = "التسجيل",
+        PLAYBACK = "التشغيل",
+        PLAYER = "اللاعبون",
+        MOVEMENT = "الحركة",
+        RECORD_SPEED = "سرعة التسجيل",
+        ESP = "ESP",
+    }
+
+    for category, count in pairs(VantageLogger.Counts) do
+        table.insert(parts, tostring(categoryNames[category] or category) .. ": " .. tostring(count))
+    end
+
+    table.sort(parts)
+
+    VantageLogger.Send(
+        "انتهت الجلسة",
+        "السبب: **" .. tostring(reason or "غير معروف") .. "**\nالمدة: **" .. tostring(math.max(0, os.time() - VantageLogger.StartedAt)) .. " ثانية**\nالأحداث: **" .. (#parts > 0 and table.concat(parts, " • ") or "لا توجد") .. "**",
+        "SESSION"
+    )
+end
+
+
+-- ============================================
+-- VANTAGE LICENSE GATE
+-- Set this to your deployed API URL, e.g. https://your-domain.example
+-- ============================================
+VantageLicense = VantageLicense or {
+    ApiBase = "https://workflow-attachments-promises-worcester.trycloudflare.com",
+    SessionToken = nil,
+    Key = nil,
+    Plan = nil,
+    ExpiresAt = nil,
+    HeartbeatRunning = false,
+    ModeWatchRunning = false,
+    GateOpen = false,
+    LicenseFolder = "VantageLicense",
+    LicenseFile = "VantageLicense/license.json",
+}
+
+function VantageLicense.Request(method, path, body)
+    local requestFn = request or http_request or (syn and syn.request)
+    if not requestFn then
+        return false, "This executor does not expose an HTTP request function."
+    end
+
+    local headers = {["Content-Type"] = "application/json"}
+    if VantageLicense.SessionToken then
+        headers["Authorization"] = "Bearer " .. tostring(VantageLicense.SessionToken)
+    end
+
+    local ok, response = pcall(function()
+        return requestFn({
+            Url = VantageLicense.ApiBase .. path,
+            Method = method,
+            Headers = headers,
+            Body = body and HttpService:JSONEncode(body) or nil
+        })
+    end)
+
+    if not ok or not response then
+        return false, "API request failed."
+    end
+
+    local status = tonumber(response.StatusCode or response.Status or 0) or 0
+    local decoded = nil
+    pcall(function()
+        decoded = HttpService:JSONDecode(response.Body or "{}")
+    end)
+
+    if status >= 200 and status < 300 and type(decoded) == "table" then
+        return true, decoded, status
+    end
+
+    return false, (type(decoded) == "table" and decoded.error) or ("HTTP " .. tostring(status)), status
+end
+
+function VantageLicense.RequestTimed(method, path, body, timeoutSeconds)
+    timeoutSeconds = tonumber(timeoutSeconds) or 4
+    local finished = false
+    local okResult, dataResult, statusResult = false, "API request timed out.", 0
+
+    task.spawn(function()
+        local ok, data, status = VantageLicense.Request(method, path, body)
+        if not finished then
+            okResult, dataResult, statusResult = ok, data, status or 0
+            finished = true
+        end
+    end)
+
+    local started = os.clock()
+    while not finished and (os.clock() - started) < timeoutSeconds do
+        task.wait(0.05)
+    end
+
+    if not finished then
+        finished = true
+        return false, "API request timed out.", 0
+    end
+
+    return okResult, dataResult, statusResult
+end
+
+function VantageLicense.SaveKey(keyText)
+    if type(writefile) ~= "function" then
+        return false
+    end
+
+    local payload = HttpService:JSONEncode({
+        key = tostring(keyText or ""),
+        saved_at = os.time(),
+    })
+
+    -- Root-level file is more compatible across executors than nested folders.
+    local ok = pcall(function()
+        writefile("VANTAGE_LICENSE.json", payload)
+    end)
+
+    -- Keep the old location as a best-effort compatibility copy.
+    if type(makefolder) == "function" then
+        pcall(function()
+            if type(isfolder) ~= "function" or not isfolder(VantageLicense.LicenseFolder) then
+                makefolder(VantageLicense.LicenseFolder)
+            end
+            writefile(VantageLicense.LicenseFile, payload)
+        end)
+    end
+
+    return ok
+end
+
+function VantageLicense.LoadKey()
+    if type(readfile) ~= "function" then return nil end
+
+    local function readKey(path)
+        if type(isfile) == "function" then
+            local existsOk, exists = pcall(isfile, path)
+            if existsOk and not exists then return nil end
+        end
+
+        local ok, raw = pcall(readfile, path)
+        if not ok or type(raw) ~= "string" or raw == "" then return nil end
+
+        local decoded
+        local decodeOk = pcall(function()
+            decoded = HttpService:JSONDecode(raw)
+        end)
+        if decodeOk and type(decoded) == "table" and type(decoded.key) == "string" and decoded.key ~= "" then
+            return decoded.key
+        end
+        return nil
+    end
+
+    local key = readKey("VANTAGE_LICENSE.json")
+    if key then return key end
+
+    -- Migrate existing users automatically from the previous save path.
+    key = readKey(VantageLicense.LicenseFile)
+    if key then
+        VantageLicense.SaveKey(key)
+        return key
+    end
+
+    return nil
+end
+
+function VantageLicense.ClearSavedKey()
+    for _, path in ipairs({"VANTAGE_LICENSE.json", VantageLicense.LicenseFile}) do
+        if type(delfile) == "function" then
+            pcall(delfile, path)
+        elseif type(writefile) == "function" then
+            pcall(function()
+                writefile(path, HttpService:JSONEncode({ key = "" }))
+            end)
+        end
+    end
+end
+
+function VantageLicense.Validate(keyText)
+    keyText = tostring(keyText or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if keyText == "" then
+        return false, "Enter your VANTAGE key."
+    end
+
+    local ok, result, status = VantageLicense.RequestTimed("POST", "/v1/license/activate", {
+        key = keyText,
+        user_id = tostring(LocalPlayer.UserId),
+        username = tostring(LocalPlayer.Name),
+        display_name = tostring(LocalPlayer.DisplayName),
+        place_id = tostring(game.PlaceId),
+        job_id = tostring(game.JobId),
+        game_name = VantageLogger.GetGameName(),
+    }, 5)
+
+    if not ok then
+        return false, tostring(result), status
+    end
+
+    VantageLicense.Key = keyText
+    VantageLicense.SessionToken = result.session_token
+    VantageLicense.Plan = result.plan
+    VantageLicense.ExpiresAt = tonumber(result.expires_at)
+    local saved = VantageLicense.SaveKey(keyText)
+    if not saved then
+        warn("VANTAGE: key is valid, but this executor did not allow persistent key saving.")
+    end
+    return true, result
+end
+
+function VantageLicense.FormatRemaining()
+    if not VantageLicense.Key then
+        return "NO KEY MODE"
+    end
+    if VantageLicense.ExpiresAt == nil then
+        return "LIFETIME"
+    end
+
+    local left = math.max(0, math.floor(VantageLicense.ExpiresAt - os.time()))
+    local days = math.floor(left / 86400)
+    local hours = math.floor((left % 86400) / 3600)
+    local mins = math.floor((left % 3600) / 60)
+    local secs = left % 60
+    if days > 0 then
+        return string.format("%dd %02d:%02d:%02d", days, hours, mins, secs)
+    end
+    return string.format("%02d:%02d:%02d", hours, mins, secs)
+end
+
+function VantageLicense.UpdateExpiryLabel()
+    if VantageLicense.ExpiryLabel and VantageLicense.ExpiryLabel.Parent then
+        VantageLicense.ExpiryLabel.Text = VantageLicense.FormatRemaining()
+    end
+end
+
+function VantageLicense.HandleLicenseEnded(reason)
+    if VantageLicense.LicenseEndedHandling then return end
+    VantageLicense.LicenseEndedHandling = true
+
+    VantageLicense.HeartbeatRunning = false
+    VantageLicense.SessionToken = nil
+    VantageLicense.Key = nil
+    VantageLicense.Plan = nil
+    VantageLicense.ExpiresAt = nil
+    VantageLicense.ClearSavedKey()
+    VantageLicense.UpdateExpiryLabel()
+
+    -- Revoke access immediately. The license gate is a separate ScreenGui, so it remains visible.
+    if ScreenGui and ScreenGui.Parent then
+        ScreenGui.Enabled = false
+    end
+
+    task.spawn(function()
+        if not VantageLicense.GateOpen then
+            VantageLicense.ShowGate(reason or "Your VANTAGE key is no longer active.")
+        end
+        VantageLicense.LicenseEndedHandling = false
+    end)
+end
+
+function VantageLicense.StartHeartbeat()
+    if VantageLicense.HeartbeatRunning or not VantageLicense.SessionToken then
+        return
+    end
+
+    VantageLicense.HeartbeatRunning = true
+    task.spawn(function()
+        while VantageLicense.HeartbeatRunning and VantageLicense.SessionToken do
+            local ok, result, status = VantageLicense.RequestTimed("POST", "/v1/session/heartbeat", {
+                place_id = tostring(game.PlaceId),
+                job_id = tostring(game.JobId),
+                game_name = VantageLogger.GetGameName(),
+                player_count = #Players:GetPlayers(),
+                max_players = Players.MaxPlayers,
+            }, 4)
+
+            if ok and type(result) == "table" then
+                if result.expires_at ~= nil then
+                    VantageLicense.ExpiresAt = tonumber(result.expires_at)
+                end
+                if result.plan ~= nil then
+                    VantageLicense.Plan = tostring(result.plan)
+                end
+                VantageLicense.UpdateExpiryLabel()
+            elseif status == 401 or status == 403 or status == 404 then
+                VantageLicense.HandleLicenseEnded(tostring(result or "Your VANTAGE key is no longer active."))
+                break
+            end
+
+            -- Fast revocation check: a disabled key loses access within about 2 seconds.
+            task.wait(2)
+        end
+    end)
+end
+
+function VantageLicense.IsKeyRequired()
+    local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
+    if ok and type(result) == "table" and result.require_key ~= nil then
+        return result.require_key == true
+    end
+
+    -- Safe fallback: if the mode endpoint cannot be reached, keep requiring a key.
+    return true
+end
+
+function VantageLicense.SetNoKeyAccess()
+    -- NO-KEY must immediately release a waiting license gate.
+    VantageLicense.HeartbeatRunning = false
+    VantageLicense.SessionToken = nil
+    VantageLicense.Key = nil
+    VantageLicense.Plan = "NO KEY MODE"
+    VantageLicense.ExpiresAt = nil
+    VantageLicense.UpdateExpiryLabel()
+
+    if VantageLicense.GateGui and VantageLicense.GateGui.Parent then
+        VantageLicense.GateGui:Destroy()
+    end
+    VantageLicense.GateGui = nil
+    VantageLicense.GateOpen = false
+
+    if VantageLicense.GateDone then
+        pcall(function()
+            VantageLicense.GateDone:Fire(true)
+        end)
+        VantageLicense.GateDone = nil
+    end
+
+    if ScreenGui and ScreenGui.Parent then
+        ScreenGui.Enabled = true
+    end
+end
+
+function VantageLicense.StartModeWatch()
+    if VantageLicense.ModeWatchRunning then return end
+    VantageLicense.ModeWatchRunning = true
+
+    task.spawn(function()
+        local lastMode = nil
+
+        while VantageLicense.ModeWatchRunning do
+            local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
+
+            if ok and type(result) == "table" and result.require_key ~= nil then
+                local requireKey = result.require_key == true
+
+                if lastMode == nil or lastMode ~= requireKey then
+                    lastMode = requireKey
+
+                    if requireKey then
+                        if not VantageLicense.SessionToken then
+                            if ScreenGui and ScreenGui.Parent then
+                                ScreenGui.Enabled = false
+                            end
+
+                            if not VantageLicense.GateOpen then
+                                task.spawn(function()
+                                    VantageLicense.ShowGate("تم تفعيل وضع الكي. أدخل كي VANTAGE فعال.")
+                                end)
+                            end
+                        end
+                    else
+                        VantageLicense.SetNoKeyAccess()
+                    end
+                end
+            end
+
+            task.wait(2)
+        end
+    end)
+end
+
+function VantageLicense.ShowGate(initialMessage)
+    if VantageLicense.GateOpen then return end
+    VantageLicense.GateOpen = true
+    local DISCORD_INVITE = "https://discord.gg/szsxhYKrxG"
+
+    local gateGui = Instance.new("ScreenGui")
+    VantageLicense.GateGui = gateGui
+    gateGui.Name = "VantageLicenseGate"
+    gateGui.ResetOnSpawn = false
+    gateGui.IgnoreGuiInset = false
+    gateGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(430, 302)
+    frame.Position = UDim2.new(0.5, -215, 0.5, -151)
+    frame.BackgroundColor3 = Color3.fromRGB(13, 10, 23)
+    frame.BorderSizePixel = 0
+    frame.Parent = gateGui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(145, 82, 255)
+    stroke.Thickness = 1.5
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Size = UDim2.new(1, -82, 0, 44)
+    title.Position = UDim2.fromOffset(18, 18)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "VANTAGE • LICENSE"
+    title.TextSize = 20
+    title.TextColor3 = Color3.fromRGB(245, 242, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
+
+    local close = Instance.new("TextButton")
+    close.Name = "Close"
+    close.Size = UDim2.fromOffset(34, 34)
+    close.Position = UDim2.new(1, -49, 0, 14)
+    close.BackgroundColor3 = Color3.fromRGB(28, 21, 47)
+    close.BorderSizePixel = 0
+    close.Font = Enum.Font.GothamBold
+    close.Text = "X"
+    close.TextSize = 16
+    close.TextColor3 = Color3.fromRGB(205, 190, 230)
+    close.Parent = frame
+    Instance.new("UICorner", close).CornerRadius = UDim.new(0, 9)
+
+    local sub = Instance.new("TextLabel")
+    sub.BackgroundTransparency = 1
+    sub.Size = UDim2.new(1, -36, 0, 30)
+    sub.Position = UDim2.fromOffset(18, 56)
+    sub.Font = Enum.Font.Gotham
+    sub.Text = "Enter your active Day / Month / Lifetime key"
+    sub.TextSize = 12
+    sub.TextColor3 = Color3.fromRGB(168, 158, 190)
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+    sub.Parent = frame
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -36, 0, 48)
+    box.Position = UDim2.fromOffset(18, 98)
+    box.BackgroundColor3 = Color3.fromRGB(24, 18, 42)
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+    box.PlaceholderText = "VANTAGE-XXXX-XXXX-XXXX"
+    box.Text = VantageLicense.LoadKey() or ""
+    box.Font = Enum.Font.Code
+    box.TextSize = 14
+    box.TextColor3 = Color3.fromRGB(245, 242, 255)
+    box.PlaceholderColor3 = Color3.fromRGB(110, 101, 130)
+    box.Parent = frame
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 9)
+
+    local status = Instance.new("TextLabel")
+    status.BackgroundTransparency = 1
+    status.Size = UDim2.new(1, -36, 0, 24)
+    status.Position = UDim2.fromOffset(18, 151)
+    status.Font = Enum.Font.Gotham
+    status.Text = initialMessage or "License is bound to the first Roblox UserId that activates it."
+    status.TextSize = 11
+    status.TextColor3 = Color3.fromRGB(145, 132, 165)
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = frame
+
+    local activate = Instance.new("TextButton")
+    activate.Size = UDim2.new(1, -36, 0, 44)
+    activate.Position = UDim2.fromOffset(18, 183)
+    activate.BackgroundColor3 = Color3.fromRGB(145, 82, 255)
+    activate.BorderSizePixel = 0
+    activate.Font = Enum.Font.GothamBold
+    activate.Text = "ACTIVATE VANTAGE"
+    activate.TextSize = 13
+    activate.TextColor3 = Color3.fromRGB(255, 255, 255)
+    activate.Parent = frame
+    Instance.new("UICorner", activate).CornerRadius = UDim.new(0, 9)
+
+    local discord = Instance.new("TextButton")
+    discord.Size = UDim2.new(1, -36, 0, 42)
+    discord.Position = UDim2.fromOffset(18, 239)
+    discord.BackgroundColor3 = Color3.fromRGB(24, 18, 42)
+    discord.BorderSizePixel = 0
+    discord.Font = Enum.Font.GothamBold
+    discord.Text = "DISCORD SERVER"
+    discord.TextSize = 12
+    discord.TextColor3 = Color3.fromRGB(205, 180, 255)
+    discord.Parent = frame
+    Instance.new("UICorner", discord).CornerRadius = UDim.new(0, 9)
+
+    local done = Instance.new("BindableEvent")
+    VantageLicense.GateDone = done
+    local busy = false
+
+    local function submit()
+        if busy then return end
+        busy = true
+        activate.Text = "CHECKING..."
+        status.Text = "Validating license..."
+        status.TextColor3 = Color3.fromRGB(190, 174, 215)
+
+        local ok, result = VantageLicense.Validate(box.Text)
+        if ok then
+            status.Text = "LICENSE ACTIVE • " .. tostring(result.plan or "ACTIVE")
+            status.TextColor3 = Color3.fromRGB(92, 230, 145)
+            activate.Text = "ACCESS GRANTED"
+            VantageLicense.StartHeartbeat()
+            task.wait(0.35)
+            VantageLicense.GateOpen = false
+            if gateGui and gateGui.Parent then
+                gateGui:Destroy()
+            end
+            VantageLicense.GateGui = nil
+            VantageLicense.GateDone = nil
+            if ScreenGui and ScreenGui.Parent then
+                ScreenGui.Enabled = true
+            end
+            done:Fire(true)
+        else
+            status.Text = tostring(result)
+            status.TextColor3 = Color3.fromRGB(255, 100, 120)
+            activate.Text = "ACTIVATE VANTAGE"
+            busy = false
+        end
+    end
+
+    activate.MouseButton1Click:Connect(submit)
+
+    box.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            submit()
+        end
+    end)
+
+    discord.MouseButton1Click:Connect(function()
+        local copied = false
+
+        if type(setclipboard) == "function" then
+            copied = pcall(setclipboard, DISCORD_INVITE)
+        elseif type(toclipboard) == "function" then
+            copied = pcall(toclipboard, DISCORD_INVITE)
+        end
+
+        if copied then
+            discord.Text = "DISCORD LINK COPIED"
+        else
+            discord.Text = DISCORD_INVITE
+        end
+    end)
+
+    close.MouseButton1Click:Connect(function()
+        -- Closing the gate never grants access, but reset the UI state cleanly.
+        VantageLicense.GateOpen = false
+        if gateGui and gateGui.Parent then
+            gateGui:Destroy()
+        end
+        VantageLicense.GateGui = nil
+        VantageLicense.GateDone = nil
+    end)
+
+    done.Event:Wait()
+    pcall(function() done:Destroy() end)
+end
+
+-- Watch KEY / NO-KEY mode continuously in both directions.
+VantageLicense.StartModeWatch()
+
+if VantageLicense.IsKeyRequired() then
+    local savedKey = VantageLicense.LoadKey()
+    local autoGranted = false
+
+    if savedKey then
+        local ok, result, status = VantageLicense.Validate(savedKey)
+        if ok then
+            autoGranted = true
+            VantageLicense.StartHeartbeat()
+        elseif status == 401 or status == 403 or status == 404 then
+            VantageLicense.ClearSavedKey()
+        end
+    end
+
+    if not autoGranted then
+        VantageLicense.ShowGate()
+    end
+else
+    VantageLicense.Key = nil
+    VantageLicense.Plan = "NO KEY MODE"
+    VantageLicense.ExpiresAt = nil
+end
+
+pcall(function()
+    VantageLogger.Send(
+        "بدأت الجلسة",
+        "تم تشغيل VANTAGE وتفعيل تسجيل النشاط.\nاللعبة: **" .. VantageLogger.GetGameName() .. "**\nعدد اللاعبين: **" .. VantageLogger.GetPlayerCount() .. "**",
+        "SESSION"
+    )
+end)
+
 
 local T = {
     Black = Color3.fromRGB(5, 5, 9),
@@ -2791,7 +3492,9 @@ MainMenu.Size = UDim2.new(0, 650, 0, 630)
 MainMenu.Position = UDim2.new(0.5, 0, 0.5, 0)
 MainMenu.BackgroundColor3 = T.Black
 MainMenu.BorderSizePixel = 0
-MainMenu.Visible = true
+-- Keep the legacy shell hidden while Style 4 is being built.
+-- This prevents the old menu from flashing on-screen before the redesign is ready.
+MainMenu.Visible = false
 MainMenu.Parent = ScreenGui
 Corner(MainMenu, 14)
 Stroke(MainMenu, Color3.fromRGB(79, 48, 121), 0.05)
@@ -2825,8 +3528,21 @@ Stroke(LogoBox, T.Border, 0)
 local Logo = Text(LogoBox, "V", UDim2.new(1,0,1,0), UDim2.new(), Enum.Font.GothamBlack, 20, T.BlueSoft, Enum.TextXAlignment.Center)
 
 local Brand = Text(Header, "VANTAGE", UDim2.new(0, 210, 0, 24), UDim2.new(0, 70, 0, 13), Enum.Font.GothamBold, 17, T.Text)
-local Sub = Text(Header, "ULTIMATE GAME ENHANCER", UDim2.new(0, 210, 0, 18), UDim2.new(0, 70, 0, 36), Enum.Font.GothamMedium, 9, T.Muted)
 
+local ExpiryLabel = Text(Header, "", UDim2.new(0, 150, 0, 30), UDim2.new(1, -240, 0, 20), Enum.Font.GothamBold, 10, T.BlueSoft, Enum.TextXAlignment.Right)
+ExpiryLabel.Name = "LicenseCountdown"
+VantageLicense.ExpiryLabel = ExpiryLabel
+VantageLicense.UpdateExpiryLabel()
+
+task.spawn(function()
+    while ScreenGui and ScreenGui.Parent do
+        VantageLicense.UpdateExpiryLabel()
+        if VantageLicense.Key and VantageLicense.ExpiresAt and os.time() >= VantageLicense.ExpiresAt then
+            VantageLicense.HandleLicenseEnded("This VANTAGE key has expired. Enter another active key.")
+        end
+        task.wait(1)
+    end
+end)
 
 local MinBtn = Instance.new("TextButton")
 MinBtn.Size = UDim2.new(0, 32, 0, 32)
@@ -2901,7 +3617,7 @@ LoopBtn = ActionButton("LoopButton", 306, 28, 296, 76, "↻", "LOOP PLAYBACK", "
 StopBtn = ActionButton("StopButton", 0, 114, 296, 76, "■", "STOP PLAYBACK", "Stop active playback", T.Red)
 ListBtn = ActionButton("LibraryButton", 306, 114, 296, 76, "≡", "RECORDINGS", "Open recording library", Color3.fromRGB(91, 137, 184))
 
-LocationsBtn = ActionButton("LocationsButton", 0, 200, 296, 64, "⌖", "LOCATIONS", "F10 save • teleport • loop", Color3.fromRGB(78, 132, 185))
+LocationsBtn = ActionButton("LocationsButton", 0, 200, 296, 64, "◆", "LOCATIONS", "F10 save • teleport • loop", Color3.fromRGB(78, 132, 185))
 MovementBtn = ActionButton("MovementButton", 306, 200, 296, 64, "»", "MOVEMENT", "Speed • anti-fall • auto return", Color3.fromRGB(128, 83, 214))
 
 PlayersBtn = ActionButton("PlayersButton", 0, 274, 194, 64, "◎", "PLAYER LIST", "Players and spectate", Color3.fromRGB(117, 76, 198))
@@ -2909,6 +3625,35 @@ ESPMainBtn = ActionButton("ESPButton", 204, 274, 194, 64, "◇", "ESP: OFF", "Wa
 ESPColorBtn = ActionButton("ESPColorButton", 408, 274, 194, 64, "◈", "ESP COLOR", "Choose custom RGB", espColor)
 
 ProfilesBtn = ActionButton("ProfilesButton", 0, 348, 602, 54, "▣", "PROFILES", "Save and restore your VANTAGE setup", Color3.fromRGB(137, 91, 218))
+
+-- INFO category card: official VANTAGE Discord invite.
+InfoBtn = ActionButton("InfoButton", 0, 412, 602, 64, "i", "DISCORD SERVER", "https://discord.gg/szsxhYKrxG", Color3.fromRGB(176, 104, 255))
+InfoBtn.MouseButton1Click:Connect(function()
+    local copied = false
+    if type(setclipboard) == "function" then
+        copied = pcall(setclipboard, "https://discord.gg/szsxhYKrxG")
+    elseif type(toclipboard) == "function" then
+        copied = pcall(toclipboard, "https://discord.gg/szsxhYKrxG")
+    end
+
+    local labels = {}
+    for _, child in ipairs(InfoBtn:GetChildren()) do
+        if child:IsA("TextLabel") then
+            table.insert(labels, child)
+        end
+    end
+    if copied then
+        for _, label in ipairs(labels) do
+            if label.Text == "https://discord.gg/szsxhYKrxG" then
+                label.Text = "Discord link copied to clipboard"
+                task.delay(1.25, function()
+                    if label and label.Parent then label.Text = "https://discord.gg/szsxhYKrxG" end
+                end)
+                break
+            end
+        end
+    end
+end)
 
 -- Wide exit row
 CloseBtn = Instance.new("TextButton")
@@ -2948,8 +3693,6 @@ StatusDot.Parent = Footer
 Corner(StatusDot, 7)
 
 Text(Footer, "READY", UDim2.new(0, 90, 1, 0), UDim2.new(0, 27, 0, 0), Enum.Font.GothamBold, 9, T.Green)
-Text(Footer, "VANTAGE RECORDER", UDim2.new(0, 180, 1, 0), UDim2.new(0.5, -90, 0, 0), Enum.Font.GothamMedium, 9, T.Muted, Enum.TextXAlignment.Center)
-Text(Footer, "v3.0", UDim2.new(0, 70, 1, 0), UDim2.new(1, -82, 0, 0), Enum.Font.GothamBold, 9, Color3.fromRGB(95, 117, 143), Enum.TextXAlignment.Right)
 
 local ServerCountLabel = Text(
     Footer, "PLAYERS: 0",
@@ -2989,14 +3732,7 @@ local function UpdateServerCounter()
 end
 
 local function GetPingText()
-    local ok, value = pcall(function()
-        local network = Stats:FindFirstChild("Network")
-        local serverStats = network and network:FindFirstChild("ServerStatsItem")
-        local pingItem = serverStats and serverStats:FindFirstChild("Data Ping")
-        return pingItem and pingItem:GetValueString() or nil
-    end)
-
-    if ok and value and value ~= "" then return value end
+    -- Deliberately avoid the Stats service. Some games reject scripts that access it.
     return "—"
 end
 
@@ -3752,6 +4488,27 @@ Corner(MovementClose, 8)
 Text(MovementFrame, "WALK SPEED", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 78), Enum.Font.GothamBold, 10, T.Muted)
 local SpeedValue = Text(MovementFrame, tostring(walkSpeedValue), UDim2.new(0, 80, 0, 24), UDim2.new(1, -98, 0, 74), Enum.Font.GothamBold, 15, T.BlueSoft, Enum.TextXAlignment.Right)
 
+VantageSpeedToggleButton = Instance.new("TextButton")
+VantageSpeedToggleButton.Name = "VantageSpeedToggle"
+VantageSpeedToggleButton.Size = UDim2.new(0, 104, 0, 26)
+VantageSpeedToggleButton.Position = UDim2.new(0, 205, 0, 72)
+VantageSpeedToggleButton.BackgroundColor3 = T.Navy
+VantageSpeedToggleButton.BorderSizePixel = 0
+VantageSpeedToggleButton.Text = "SPEED: OFF"
+VantageSpeedToggleButton.TextColor3 = T.Muted
+VantageSpeedToggleButton.TextSize = 9
+VantageSpeedToggleButton.Font = Enum.Font.GothamBold
+VantageSpeedToggleButton.Parent = MovementFrame
+Corner(VantageSpeedToggleButton, 7)
+Stroke(VantageSpeedToggleButton, T.Border, 0.2)
+
+VantageSpeedToggleButton.MouseButton1Click:Connect(function()
+    StartSpeedBoost()
+    VantageSpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
+    VantageSpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
+    VantageLogger.Send("تغيير سرعة الحركة", "الحالة: **" .. (speedBoostConnection and "مفعلة" or "متوقفة") .. "**\\nالقيمة: **" .. tostring(walkSpeedValue) .. "**", "MOVEMENT")
+end)
+
 local function MovementSlider(y, minValue, maxValue, initialValue, onChanged)
     local track = Instance.new("Frame")
     track.Size = UDim2.new(0, 352, 0, 8)
@@ -4340,7 +5097,7 @@ function UpdateList()
 
         local btn = Instance.new("Frame")
 
-        btn.Size = UDim2.new(1, -10, 0, 42)
+        btn.Size = UDim2.new(1, -10, 0, 78)
 
         btn.Position = UDim2.new(0, 5, 0, yOffset)
 
@@ -4362,7 +5119,7 @@ function UpdateList()
 
         local nameLabel = Instance.new("TextLabel")
 
-        nameLabel.Size = UDim2.new(0.45, 0, 1, 0)
+        nameLabel.Size = UDim2.new(0.45, 0, 0, 42)
 
         nameLabel.Position = UDim2.new(0, 8, 0, 0)
 
@@ -4470,6 +5227,116 @@ function UpdateList()
 
         delCorner.Parent = delBtn
 
+        if data.PlaybackSpeed == nil then
+            data.PlaybackSpeed = 1.0
+        end
+
+        if data.PlaybackSpeedEnabled == nil then
+            data.PlaybackSpeedEnabled = false
+        end
+
+        local speedToggleBtn = Instance.new("TextButton")
+        speedToggleBtn.Size = UDim2.new(0, 82, 0, 24)
+        speedToggleBtn.Position = UDim2.new(0, 8, 0, 47)
+        speedToggleBtn.BackgroundColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(28, 82, 55) or Color3.fromRGB(28, 30, 40)
+        speedToggleBtn.BorderSizePixel = 1
+        speedToggleBtn.BorderColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(80, 220, 140) or Color3.fromRGB(70, 70, 90)
+        speedToggleBtn.Text = data.PlaybackSpeedEnabled and "SPEED ON" or "SPEED OFF"
+        speedToggleBtn.TextColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(185, 255, 205) or Color3.fromRGB(180, 180, 195)
+        speedToggleBtn.TextSize = 9
+        speedToggleBtn.Font = Enum.Font.GothamBold
+        speedToggleBtn.Parent = btn
+        local speedToggleCorner = Instance.new("UICorner")
+        speedToggleCorner.CornerRadius = UDim.new(0, 4)
+        speedToggleCorner.Parent = speedToggleBtn
+
+        local speedMinusBtn = Instance.new("TextButton")
+        speedMinusBtn.Size = UDim2.new(0, 28, 0, 24)
+        speedMinusBtn.Position = UDim2.new(0, 98, 0, 47)
+        speedMinusBtn.BackgroundColor3 = Color3.fromRGB(22, 24, 34)
+        speedMinusBtn.BorderSizePixel = 1
+        speedMinusBtn.BorderColor3 = Color3.fromRGB(70, 70, 90)
+        speedMinusBtn.Text = "−"
+        speedMinusBtn.TextColor3 = Color3.fromRGB(230, 230, 240)
+        speedMinusBtn.TextSize = 14
+        speedMinusBtn.Font = Enum.Font.GothamBold
+        speedMinusBtn.Parent = btn
+        local speedMinusCorner = Instance.new("UICorner")
+        speedMinusCorner.CornerRadius = UDim.new(0, 4)
+        speedMinusCorner.Parent = speedMinusBtn
+
+        local speedValueBtn = Instance.new("TextButton")
+        speedValueBtn.Size = UDim2.new(0, 58, 0, 24)
+        speedValueBtn.Position = UDim2.new(0, 132, 0, 47)
+        speedValueBtn.BackgroundColor3 = Color3.fromRGB(18, 20, 30)
+        speedValueBtn.BorderSizePixel = 1
+        speedValueBtn.BorderColor3 = Color3.fromRGB(80, 70, 110)
+        speedValueBtn.Text = string.format("%.2fx", math.clamp(tonumber(data.PlaybackSpeed) or 1, 0.10, 20))
+        speedValueBtn.TextColor3 = Color3.fromRGB(205, 180, 255)
+        speedValueBtn.TextSize = 10
+        speedValueBtn.Font = Enum.Font.GothamBold
+        speedValueBtn.AutoButtonColor = false
+        speedValueBtn.Parent = btn
+        local speedValueCorner = Instance.new("UICorner")
+        speedValueCorner.CornerRadius = UDim.new(0, 4)
+        speedValueCorner.Parent = speedValueBtn
+
+        local speedPlusBtn = Instance.new("TextButton")
+        speedPlusBtn.Size = UDim2.new(0, 28, 0, 24)
+        speedPlusBtn.Position = UDim2.new(0, 196, 0, 47)
+        speedPlusBtn.BackgroundColor3 = Color3.fromRGB(22, 24, 34)
+        speedPlusBtn.BorderSizePixel = 1
+        speedPlusBtn.BorderColor3 = Color3.fromRGB(70, 70, 90)
+        speedPlusBtn.Text = "+"
+        speedPlusBtn.TextColor3 = Color3.fromRGB(230, 230, 240)
+        speedPlusBtn.TextSize = 14
+        speedPlusBtn.Font = Enum.Font.GothamBold
+        speedPlusBtn.Parent = btn
+        local speedPlusCorner = Instance.new("UICorner")
+        speedPlusCorner.CornerRadius = UDim.new(0, 4)
+        speedPlusCorner.Parent = speedPlusBtn
+
+        local speedHint = Instance.new("TextLabel")
+        speedHint.Size = UDim2.new(1, -238, 0, 24)
+        speedHint.Position = UDim2.new(0, 232, 0, 47)
+        speedHint.BackgroundTransparency = 1
+        speedHint.Text = "0.10x  —  20.00x"
+        speedHint.TextColor3 = Color3.fromRGB(125, 125, 145)
+        speedHint.TextSize = 8
+        speedHint.TextXAlignment = Enum.TextXAlignment.Left
+        speedHint.Font = Enum.Font.Gotham
+        speedHint.Parent = btn
+
+        speedToggleBtn.MouseButton1Click:Connect(function()
+            data.PlaybackSpeedEnabled = not (data.PlaybackSpeedEnabled == true)
+
+            speedToggleBtn.Text = data.PlaybackSpeedEnabled and "SPEED ON" or "SPEED OFF"
+            speedToggleBtn.BackgroundColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(28, 82, 55) or Color3.fromRGB(28, 30, 40)
+            speedToggleBtn.BorderColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(80, 220, 140) or Color3.fromRGB(70, 70, 90)
+            speedToggleBtn.TextColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(185, 255, 205) or Color3.fromRGB(180, 180, 195)
+
+            SaveRecordingToFile(name, data)
+            VantageLogger.Send("تبديل سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالحالة: **" .. (data.PlaybackSpeedEnabled and "مفعلة" or "متوقفة") .. "**\\nالسرعة المختارة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+        end)
+
+        speedMinusBtn.MouseButton1Click:Connect(function()
+            local currentSpeed = tonumber(data.PlaybackSpeed) or 1
+            local step = currentSpeed <= 1 and 0.10 or (currentSpeed <= 5 and 0.25 or (currentSpeed <= 10 and 0.50 or 1.00))
+            data.PlaybackSpeed = math.clamp(currentSpeed - step, 0.10, 20)
+            speedValueBtn.Text = string.format("%.2fx", data.PlaybackSpeed)
+            SaveRecordingToFile(name, data)
+            VantageLogger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+        end)
+
+        speedPlusBtn.MouseButton1Click:Connect(function()
+            local currentSpeed = tonumber(data.PlaybackSpeed) or 1
+            local step = currentSpeed < 1 and 0.10 or (currentSpeed < 5 and 0.25 or (currentSpeed < 10 and 0.50 or 1.00))
+            data.PlaybackSpeed = math.clamp(currentSpeed + step, 0.10, 20)
+            speedValueBtn.Text = string.format("%.2fx", data.PlaybackSpeed)
+            SaveRecordingToFile(name, data)
+            VantageLogger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+        end)
+
         playBtn.MouseButton1Click:Connect(function()
 
             ListFrame.Visible = false
@@ -4492,7 +5359,7 @@ function UpdateList()
 
         end)
 
-        yOffset = yOffset + 48
+        yOffset = yOffset + 84
 
     end
 
@@ -4507,49 +5374,36 @@ end
 -- ============================================
 
 RunService.RenderStepped:Connect(function()
-
     if not recording then return end
 
     local char = LocalPlayer.Character
-
     if not char then return end
 
     local root = char:FindFirstChild("HumanoidRootPart")
-
     if not root then return end
 
-    local currentPos = root.Position
+    local now = tick()
+    local cf = root.CFrame
 
-    local currentTime = tick()
+    if lastPos then
+        local posChanged = (cf.Position - lastPos.Position).Magnitude > 0.001
+        local lookChanged = (cf.LookVector - lastPos.LookVector).Magnitude > 0.001
+        local upChanged = (cf.UpVector - lastPos.UpVector).Magnitude > 0.001
 
-    if lastPos and lastTime then
-
-        local distance = (currentPos - lastPos).Magnitude
-
-        if distance > 0.3 then
-
+        if posChanged or lookChanged or upChanged then
             table.insert(recordedData, {
-
-                Position = {X = currentPos.X, Y = currentPos.Y, Z = currentPos.Z},
-
-                Time = currentTime - lastTime
-
+                CFrame = {cf:GetComponents()},
+                Position = {X = cf.X, Y = cf.Y, Z = cf.Z},
+                Time = math.max(0, now - (lastTime or now))
             })
 
-            lastPos = currentPos
-
-            lastTime = currentTime
-
+            lastPos = cf
+            lastTime = now
         end
-
     else
-
-        lastPos = currentPos
-
-        lastTime = currentTime
-
+        lastPos = cf
+        lastTime = now
     end
-
 end)
 
 -- ============================================
@@ -4626,6 +5480,8 @@ MovementBtn.MouseButton1Click:Connect(function()
     FlySpeedText.Text = tostring(flySpeed)
     SetWalkSliderVisual(walkSpeedValue)
     SetFlySliderVisual(flySpeed)
+    VantageSpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
+    VantageSpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
     MovementFrame.Visible = true
 end)
 
@@ -4663,6 +5519,7 @@ ESPMainBtn.MouseButton1Click:Connect(function()
             obj.TextColor3 = espEnabled and T.Green or T.Text
         end
     end
+    VantageLogger.Send("تغيير حالة ESP", "الحالة: **" .. (espEnabled and "مفعلة" or "متوقفة") .. "**", "ESP")
 end)
 
 ESPColorBtn.MouseButton1Click:Connect(function()
@@ -4699,6 +5556,8 @@ CloseBtn.MouseButton1Click:Connect(function()
 
     CloseESPColorPicker()
     StopPerformanceHUD()
+    VantageLogger.SessionSummary("زر الخروج من VANTAGE")
+    task.wait(0.15)
     ScreenGui:Destroy()
 
 end)
@@ -4710,6 +5569,17 @@ end)
 -- ============================================
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not (ScreenGui and ScreenGui.Parent) then return end
+    -- F1 = quick recorder ON/OFF
+    if input.KeyCode == Enum.KeyCode.F1 and ScreenGui.Parent then
+        if recording then
+            StopRecording()
+        else
+            StartRecording()
+        end
+        return
+    end
+
     if input.KeyCode == Enum.KeyCode.F10 and ScreenGui.Parent then
         OpenLocationNamePrompt()
         return
@@ -4729,6 +5599,7 @@ end)
 -- ============================================
 
 LocalPlayer.CharacterAdded:Connect(function(character)
+    if not (ScreenGui and ScreenGui.Parent) then return end
     StopFly()
 
     local humanoid = character:WaitForChild("Humanoid", 10)
@@ -4773,6 +5644,7 @@ print("")
 print("📌 CONTROLS:")
 
 print("  Insert  = Show/Hide menu")
+print("  F1      = Start/Stop recording")
 print("  F10     = Save current location")
 
 print("  ● START RECORDING = Start/Stop recording")
@@ -5317,6 +6189,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
 
     -- Do not reject RMB merely because Roblox marked it as processed.
     aimInputBeganConnection = UserInputService.InputBegan:Connect(function(input)
+        if not (ScreenGui and ScreenGui.Parent) then return end
         if input.UserInputType == Enum.UserInputType.MouseButton2 and aimEnabled then
             aimHolding = true
             AcquireTarget()
@@ -5324,6 +6197,7 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     end)
 
     aimInputEndedConnection = UserInputService.InputEnded:Connect(function(input)
+        if not (ScreenGui and ScreenGui.Parent) then return end
         if input.UserInputType == Enum.UserInputType.MouseButton2 then
             aimHolding = false
             ClearTarget()
@@ -5358,439 +6232,6 @@ if not AimModuleLoaded then
     warn("Main VANTAGE menu remains available.")
 end
 
--- ============================================
--- VANTAGE DEVELOPER PAGE
--- Premium purple creator profile
--- ============================================
-local VantageDeveloperLoaded, VantageDeveloperError = pcall(function()
-    local DEVELOPER_NAME = "AB"
-    local DEVELOPER_DISCORD = "z6b"
-    local DEVELOPER_INVITE = "https://discord.gg/DdybHKbs5m"
-    local DEVELOPER_IMAGE_URL = "https://raw.githubusercontent.com/zfaaaaaaaa/Vantage-z6b/refs/heads/main/vantage_developer_ab.png"
-    local DEVELOPER_IMAGE_FOLDER = "VantageDeveloper"
-    local DEVELOPER_IMAGE_FILE = DEVELOPER_IMAGE_FOLDER .. "/developer_ab.png"
-
-    local function MakeGradient(parent, c1, c2, rotation)
-        local g = Instance.new("UIGradient")
-        g.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, c1),
-            ColorSequenceKeypoint.new(1, c2),
-        })
-        g.Rotation = rotation or 0
-        g.Parent = parent
-        return g
-    end
-
-    local function TryCopy(value)
-        local copied = false
-
-        if setclipboard then
-            copied = pcall(function()
-                setclipboard(value)
-            end)
-        elseif toclipboard then
-            copied = pcall(function()
-                toclipboard(value)
-            end)
-        end
-
-        return copied
-    end
-
-    local function ResolveDeveloperImage()
-        local customAsset = getcustomasset or getsynasset
-        if not customAsset then
-            return nil
-        end
-
-        local ok = pcall(function()
-            if makefolder and isfolder and not isfolder(DEVELOPER_IMAGE_FOLDER) then
-                makefolder(DEVELOPER_IMAGE_FOLDER)
-            end
-
-            local needsDownload = true
-            if isfile then
-                needsDownload = not isfile(DEVELOPER_IMAGE_FILE)
-            end
-
-            if needsDownload and writefile then
-                local body = game:HttpGet(DEVELOPER_IMAGE_URL)
-                if body and #body > 100 then
-                    writefile(DEVELOPER_IMAGE_FILE, body)
-                end
-            end
-        end)
-
-        if not ok then
-            return nil
-        end
-
-        local success, asset = pcall(function()
-            return customAsset(DEVELOPER_IMAGE_FILE)
-        end)
-
-        if success then
-            return asset
-        end
-
-        return nil
-    end
-
-    -- Final main-menu spacing after AIM + AUTO COMBAT have already initialized.
-    MainMenu.Size = UDim2.new(0, 650, 0, 700)
-
-    if ProfilesBtn and ProfilesBtn.Parent then
-        ProfilesBtn.Position = UDim2.new(0, 0, 0, 412)
-    end
-
-    local DeveloperBtn = ActionButton(
-        "DeveloperButton", 0, 476, 602, 54,
-        "♛", "DEVELOPER", "Creator profile • Discord • VANTAGE",
-        T.PurpleSoft
-    )
-
-    if CloseBtn and CloseBtn.Parent then
-        CloseBtn.Position = UDim2.new(0, 0, 0, 540)
-    end
-
-    -- Developer page shell
-    local DeveloperFrame = Instance.new("Frame")
-    DeveloperFrame.Name = "DeveloperFrame"
-    DeveloperFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-    DeveloperFrame.Size = UDim2.new(0, 780, 0, 590)
-    DeveloperFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-    DeveloperFrame.BackgroundColor3 = Color3.fromRGB(5, 5, 9)
-    DeveloperFrame.BorderSizePixel = 0
-    DeveloperFrame.Visible = false
-    DeveloperFrame.Parent = ScreenGui
-    Corner(DeveloperFrame, 18)
-    Stroke(DeveloperFrame, Color3.fromRGB(93, 53, 143), 0.05)
-
-    MakeGradient(
-        DeveloperFrame,
-        Color3.fromRGB(5, 5, 9),
-        Color3.fromRGB(20, 10, 31),
-        14
-    )
-
-    -- Subtle top accent
-    local TopAccent = Instance.new("Frame")
-    TopAccent.Size = UDim2.new(1, -44, 0, 2)
-    TopAccent.Position = UDim2.new(0, 22, 0, 74)
-    TopAccent.BackgroundColor3 = T.Purple
-    TopAccent.BorderSizePixel = 0
-    TopAccent.Parent = DeveloperFrame
-    Corner(TopAccent, 2)
-    MakeGradient(
-        TopAccent,
-        Color3.fromRGB(75, 42, 125),
-        Color3.fromRGB(192, 113, 255),
-        0
-    )
-
-    -- Header
-    local DevLogoBox = Instance.new("Frame")
-    DevLogoBox.Size = UDim2.new(0, 42, 0, 42)
-    DevLogoBox.Position = UDim2.new(0, 24, 0, 18)
-    DevLogoBox.BackgroundColor3 = Color3.fromRGB(22, 14, 37)
-    DevLogoBox.BorderSizePixel = 0
-    DevLogoBox.Parent = DeveloperFrame
-    Corner(DevLogoBox, 21)
-    Stroke(DevLogoBox, T.Purple, 0.1)
-
-    Text(
-        DevLogoBox, "♙",
-        UDim2.new(1, 0, 1, 0), UDim2.new(),
-        Enum.Font.GothamBold, 22, T.PurpleSoft,
-        Enum.TextXAlignment.Center
-    )
-
-    Text(
-        DeveloperFrame, "DEVELOPER",
-        UDim2.new(0, 250, 0, 26), UDim2.new(0, 80, 0, 15),
-        Enum.Font.GothamBlack, 21, T.PurpleSoft
-    )
-
-    Text(
-        DeveloperFrame, "ABOUT THE CREATOR",
-        UDim2.new(0, 250, 0, 18), UDim2.new(0, 80, 0, 41),
-        Enum.Font.GothamMedium, 10, T.Muted
-    )
-
-    local DevClose = Instance.new("TextButton")
-    DevClose.Size = UDim2.new(0, 36, 0, 36)
-    DevClose.Position = UDim2.new(1, -56, 0, 20)
-    DevClose.BackgroundColor3 = Color3.fromRGB(13, 10, 22)
-    DevClose.BorderSizePixel = 0
-    DevClose.Text = "×"
-    DevClose.TextColor3 = T.Muted
-    DevClose.TextSize = 20
-    DevClose.Font = Enum.Font.Gotham
-    DevClose.AutoButtonColor = false
-    DevClose.Parent = DeveloperFrame
-    Corner(DevClose, 9)
-    Stroke(DevClose, T.Border, 0.2)
-    Hover(DevClose, Color3.fromRGB(13, 10, 22), Color3.fromRGB(29, 17, 43))
-
-    -- Left creator card
-    local CreatorCard = Instance.new("Frame")
-    CreatorCard.Size = UDim2.new(0, 300, 0, 415)
-    CreatorCard.Position = UDim2.new(0, 24, 0, 94)
-    CreatorCard.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
-    CreatorCard.BorderSizePixel = 0
-    CreatorCard.Parent = DeveloperFrame
-    Corner(CreatorCard, 16)
-    Stroke(CreatorCard, Color3.fromRGB(78, 48, 118), 0.08)
-
-    local PortraitRing = Instance.new("Frame")
-    PortraitRing.Size = UDim2.new(0, 230, 0, 230)
-    PortraitRing.Position = UDim2.new(0.5, -115, 0, 24)
-    PortraitRing.BackgroundColor3 = Color3.fromRGB(23, 15, 36)
-    PortraitRing.BorderSizePixel = 0
-    PortraitRing.Parent = CreatorCard
-    Corner(PortraitRing, 115)
-    local portraitStroke = Stroke(PortraitRing, T.Purple, 0.03)
-    portraitStroke.Thickness = 2
-
-    local Portrait = Instance.new("ImageLabel")
-    Portrait.Size = UDim2.new(1, -10, 1, -10)
-    Portrait.Position = UDim2.new(0, 5, 0, 5)
-    Portrait.BackgroundColor3 = Color3.fromRGB(16, 13, 23)
-    Portrait.BorderSizePixel = 0
-    Portrait.ScaleType = Enum.ScaleType.Crop
-    Portrait.Image = ""
-    Portrait.Parent = PortraitRing
-    Corner(Portrait, 110)
-
-    local PortraitFallback = Text(
-        Portrait, "AB",
-        UDim2.new(1, 0, 1, 0), UDim2.new(),
-        Enum.Font.GothamBlack, 56, T.PurpleSoft,
-        Enum.TextXAlignment.Center
-    )
-
-    task.spawn(function()
-        local asset = ResolveDeveloperImage()
-        if asset and Portrait.Parent then
-            Portrait.Image = asset
-            PortraitFallback.Visible = false
-        end
-    end)
-
-    Text(
-        CreatorCard, "AB",
-        UDim2.new(1, -30, 0, 44), UDim2.new(0, 15, 0, 270),
-        Enum.Font.GothamBlack, 38, T.Text,
-        Enum.TextXAlignment.Center
-    )
-
-    Text(
-        CreatorCard, "DEVELOPER & CREATOR",
-        UDim2.new(1, -30, 0, 20), UDim2.new(0, 15, 0, 314),
-        Enum.Font.GothamBold, 11, T.PurpleSoft,
-        Enum.TextXAlignment.Center
-    )
-
-    local Signature = Text(
-        CreatorCard, "A B",
-        UDim2.new(1, -30, 0, 54), UDim2.new(0, 15, 0, 340),
-        Enum.Font.GothamBlack, 31, T.Purple,
-        Enum.TextXAlignment.Center
-    )
-    Signature.TextTransparency = 0.04
-
-    -- Right profile
-    local Right = Instance.new("Frame")
-    Right.Size = UDim2.new(0, 416, 0, 415)
-    Right.Position = UDim2.new(0, 340, 0, 94)
-    Right.BackgroundTransparency = 1
-    Right.Parent = DeveloperFrame
-
-    Text(
-        Right, "AB",
-        UDim2.new(0, 240, 0, 48), UDim2.new(0, 0, 0, 4),
-        Enum.Font.GothamBlack, 40, T.Text
-    )
-
-    local Verified = Instance.new("Frame")
-    Verified.Size = UDim2.new(0, 28, 0, 28)
-    Verified.Position = UDim2.new(0, 73, 0, 13)
-    Verified.BackgroundColor3 = T.Purple
-    Verified.BorderSizePixel = 0
-    Verified.Rotation = 45
-    Verified.Parent = Right
-    Corner(Verified, 7)
-
-    local Check = Text(
-        Verified, "✓",
-        UDim2.new(1, 0, 1, 0), UDim2.new(),
-        Enum.Font.GothamBlack, 15, T.Text,
-        Enum.TextXAlignment.Center
-    )
-    Check.Rotation = -45
-
-    Text(
-        Right, "DEVELOPER & CREATOR",
-        UDim2.new(1, 0, 0, 20), UDim2.new(0, 0, 0, 54),
-        Enum.Font.GothamBold, 11, T.PurpleSoft
-    )
-
-    local QuoteCard = Instance.new("Frame")
-    QuoteCard.Size = UDim2.new(1, 0, 0, 100)
-    QuoteCard.Position = UDim2.new(0, 0, 0, 86)
-    QuoteCard.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
-    QuoteCard.BorderSizePixel = 0
-    QuoteCard.Parent = Right
-    Corner(QuoteCard, 13)
-    Stroke(QuoteCard, Color3.fromRGB(75, 48, 111), 0.28)
-
-    Text(
-        QuoteCard, "“",
-        UDim2.new(0, 34, 0, 38), UDim2.new(0, 15, 0, 8),
-        Enum.Font.GothamBlack, 31, T.PurpleSoft
-    )
-
-    local Quote = Text(
-        QuoteCard,
-        "Building VANTAGE for precision, control and performance.",
-        UDim2.new(1, -70, 0, 52), UDim2.new(0, 50, 0, 24),
-        Enum.Font.GothamMedium, 13, Color3.fromRGB(211, 206, 220)
-    )
-    Quote.TextWrapped = true
-
-    local function InfoRow(y, icon, label, value, buttonText, copyValue)
-        local Row = Instance.new("Frame")
-        Row.Size = UDim2.new(1, 0, 0, 61)
-        Row.Position = UDim2.new(0, 0, 0, y)
-        Row.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
-        Row.BorderSizePixel = 0
-        Row.Parent = Right
-        Corner(Row, 12)
-        Stroke(Row, Color3.fromRGB(70, 45, 103), 0.3)
-
-        local IconBox = Instance.new("Frame")
-        IconBox.Size = UDim2.new(0, 40, 0, 40)
-        IconBox.Position = UDim2.new(0, 10, 0.5, -20)
-        IconBox.BackgroundColor3 = Color3.fromRGB(29, 18, 47)
-        IconBox.BorderSizePixel = 0
-        IconBox.Parent = Row
-        Corner(IconBox, 9)
-        Stroke(IconBox, T.Purple, 0.25)
-
-        Text(
-            IconBox, icon,
-            UDim2.new(1, 0, 1, 0), UDim2.new(),
-            Enum.Font.GothamBold, 16, T.PurpleSoft,
-            Enum.TextXAlignment.Center
-        )
-
-        Text(
-            Row, label,
-            UDim2.new(0, 210, 0, 15), UDim2.new(0, 62, 0, 9),
-            Enum.Font.GothamMedium, 9, T.Muted
-        )
-
-        Text(
-            Row, value,
-            UDim2.new(0, 225, 0, 23), UDim2.new(0, 62, 0, 27),
-            Enum.Font.GothamBold, 13, T.Text
-        )
-
-        local CopyBtn = Instance.new("TextButton")
-        CopyBtn.Size = UDim2.new(0, 92, 0, 34)
-        CopyBtn.Position = UDim2.new(1, -102, 0.5, -17)
-        CopyBtn.BackgroundColor3 = Color3.fromRGB(27, 17, 43)
-        CopyBtn.BorderSizePixel = 0
-        CopyBtn.Text = buttonText
-        CopyBtn.TextColor3 = T.PurpleSoft
-        CopyBtn.TextSize = 11
-        CopyBtn.Font = Enum.Font.GothamBold
-        CopyBtn.AutoButtonColor = false
-        CopyBtn.Parent = Row
-        Corner(CopyBtn, 8)
-        Stroke(CopyBtn, T.Purple, 0.28)
-        Hover(CopyBtn, Color3.fromRGB(27, 17, 43), Color3.fromRGB(40, 24, 62))
-
-        CopyBtn.MouseButton1Click:Connect(function()
-            local original = CopyBtn.Text
-            local copied = TryCopy(copyValue)
-            CopyBtn.Text = copied and "COPIED" or "COPY"
-            task.delay(1.0, function()
-                if CopyBtn and CopyBtn.Parent then
-                    CopyBtn.Text = original
-                end
-            end)
-        end)
-    end
-
-    InfoRow(202, "◉", "DISCORD USERNAME", DEVELOPER_DISCORD, "COPY", DEVELOPER_DISCORD)
-    InfoRow(273, "↗", "DISCORD SERVER", "VANTAGE COMMUNITY", "INVITE", DEVELOPER_INVITE)
-    InfoRow(344, "∞", "SERVER INVITE", "discord.gg/DdybHKbs5m", "COPY", DEVELOPER_INVITE)
-
-    -- Bottom about card
-    local AboutCard = Instance.new("Frame")
-    AboutCard.Size = UDim2.new(1, -48, 0, 52)
-    AboutCard.Position = UDim2.new(0, 24, 1, -66)
-    AboutCard.BackgroundColor3 = Color3.fromRGB(11, 8, 18)
-    AboutCard.BorderSizePixel = 0
-    AboutCard.Parent = DeveloperFrame
-    Corner(AboutCard, 12)
-    Stroke(AboutCard, Color3.fromRGB(72, 46, 108), 0.25)
-
-    Text(
-        AboutCard, "♛",
-        UDim2.new(0, 40, 1, 0), UDim2.new(0, 12, 0, 0),
-        Enum.Font.GothamBlack, 20, T.PurpleSoft,
-        Enum.TextXAlignment.Center
-    )
-
-    Text(
-        AboutCard, "ABOUT VANTAGE",
-        UDim2.new(0, 160, 0, 19), UDim2.new(0, 59, 0, 8),
-        Enum.Font.GothamBold, 11, T.PurpleSoft
-    )
-
-    Text(
-        AboutCard, "Made for control • precision • performance",
-        UDim2.new(0, 360, 0, 17), UDim2.new(0, 59, 0, 27),
-        Enum.Font.Gotham, 10, T.Muted
-    )
-
-    local BackBtn = Instance.new("TextButton")
-    BackBtn.Size = UDim2.new(0, 118, 0, 34)
-    BackBtn.Position = UDim2.new(1, -132, 0.5, -17)
-    BackBtn.BackgroundColor3 = Color3.fromRGB(28, 17, 44)
-    BackBtn.BorderSizePixel = 0
-    BackBtn.Text = "←  BACK"
-    BackBtn.TextColor3 = T.PurpleSoft
-    BackBtn.TextSize = 11
-    BackBtn.Font = Enum.Font.GothamBold
-    BackBtn.AutoButtonColor = false
-    BackBtn.Parent = AboutCard
-    Corner(BackBtn, 8)
-    Stroke(BackBtn, T.Purple, 0.25)
-    Hover(BackBtn, Color3.fromRGB(28, 17, 44), Color3.fromRGB(43, 25, 65))
-
-    local function OpenDeveloperPage()
-        MainMenu.Visible = false
-        DeveloperFrame.Visible = true
-    end
-
-    local function CloseDeveloperPage()
-        DeveloperFrame.Visible = false
-        MainMenu.Visible = true
-    end
-
-    DeveloperBtn.MouseButton1Click:Connect(OpenDeveloperPage)
-    BackBtn.MouseButton1Click:Connect(CloseDeveloperPage)
-    DevClose.MouseButton1Click:Connect(CloseDeveloperPage)
-
-    print("VANTAGE DEVELOPER PAGE: LOADED")
-end)
-
-if not VantageDeveloperLoaded then
-    warn("VANTAGE DEVELOPER PAGE ERROR: " .. tostring(VantageDeveloperError))
-end
 
 
 task.defer(function()
@@ -5808,5 +6249,276 @@ task.defer(function()
 
     if not ok then
         warn("VANTAGE PROFILE AUTO-LOAD ERROR: " .. tostring(err))
+    end
+end)
+
+
+-- ============================================
+-- STYLE 4 CATEGORY LAYOUT + CLICK SOUND
+-- Sidebar categories now actually filter the main page.
+-- ============================================
+task.defer(function()
+    local ok, err = pcall(function()
+        if not MainMenu or not MainMenu.Parent then return end
+
+        MainMenu.Size = UDim2.new(0, 820, 0, 700)
+
+        if Content and Content.Parent then
+            Content.Size = UDim2.new(1, -236, 1, -120)
+            Content.Position = UDim2.new(0, 220, 0, 84)
+        end
+
+        if Footer and Footer.Parent then
+            Footer.Size = UDim2.new(1, -236, 0, 30)
+            Footer.Position = UDim2.new(0, 220, 1, -38)
+        end
+
+        local oldSidebar = MainMenu:FindFirstChild("Style4Sidebar")
+        if oldSidebar then oldSidebar:Destroy() end
+
+        local Sidebar = Instance.new("Frame")
+        Sidebar.Name = "Style4Sidebar"
+        Sidebar.Size = UDim2.new(0, 188, 1, -120)
+        Sidebar.Position = UDim2.new(0, 16, 0, 84)
+        Sidebar.BackgroundColor3 = Color3.fromRGB(8, 6, 14)
+        Sidebar.BorderSizePixel = 0
+        Sidebar.Parent = MainMenu
+        Corner(Sidebar, 14)
+        Stroke(Sidebar, Color3.fromRGB(108, 57, 171), 0.16)
+
+        local logoBox = Instance.new("Frame")
+        logoBox.Size = UDim2.new(1, -24, 0, 116)
+        logoBox.Position = UDim2.new(0, 12, 0, 12)
+        logoBox.BackgroundColor3 = Color3.fromRGB(18, 10, 31)
+        logoBox.BorderSizePixel = 0
+        logoBox.Parent = Sidebar
+        Corner(logoBox, 14)
+        Stroke(logoBox, Color3.fromRGB(176, 104, 255), 0.18)
+        local logoGrad = Instance.new("UIGradient")
+        logoGrad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 13, 47)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 7, 18))
+        })
+        logoGrad.Rotation = 35
+        logoGrad.Parent = logoBox
+        Text(logoBox, "V", UDim2.new(1,0,1,0), UDim2.new(), Enum.Font.GothamBlack, 54, Color3.fromRGB(190, 116, 255), Enum.TextXAlignment.Center)
+
+        Text(Sidebar, "VANTAGE", UDim2.new(1,-24,0,24), UDim2.new(0,12,0,140), Enum.Font.GothamBlack, 17, Color3.fromRGB(242,238,248), Enum.TextXAlignment.Center)
+
+        local line = Instance.new("Frame")
+        line.Size = UDim2.new(1,-28,0,1)
+        line.Position = UDim2.new(0,14,0,174)
+        line.BackgroundColor3 = Color3.fromRGB(79,48,121)
+        line.BorderSizePixel = 0
+        line.Parent = Sidebar
+
+        local aimBtn = Content and Content:FindFirstChild("AimButton")
+        local aimSettingsBtn = Content and Content:FindFirstChild("AimSettingsButton")
+
+        local allCards = {
+            RecordBtn, LoopBtn, StopBtn, ListBtn,
+            LocationsBtn, MovementBtn, PlayersBtn,
+            ESPMainBtn, ESPColorBtn, ProfilesBtn,
+            aimBtn, aimSettingsBtn, InfoBtn
+        }
+
+        -- Restyle action cards so the shapes fit Style 4 better.
+        for _, btn in ipairs(allCards) do
+            if btn and btn.Parent then
+                btn.BackgroundColor3 = Color3.fromRGB(11, 8, 19)
+                Corner(btn, 14)
+
+                local oldGrad = btn:FindFirstChild("Style4CardGradient")
+                if oldGrad then oldGrad:Destroy() end
+                local grad = Instance.new("UIGradient")
+                grad.Name = "Style4CardGradient"
+                grad.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(16, 10, 27)),
+                    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(10, 8, 18)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(7, 7, 13))
+                })
+                grad.Rotation = 18
+                grad.Parent = btn
+
+                local accent = btn:FindFirstChild("Style4LeftAccent")
+                if not accent then
+                    accent = Instance.new("Frame")
+                    accent.Name = "Style4LeftAccent"
+                    accent.Size = UDim2.new(0, 3, 0.58, 0)
+                    accent.Position = UDim2.new(0, 0, 0.21, 0)
+                    accent.BackgroundColor3 = Color3.fromRGB(176, 104, 255)
+                    accent.BorderSizePixel = 0
+                    accent.Parent = btn
+                    Corner(accent, 3)
+                end
+            end
+        end
+
+        local categories = {
+            {Name="RECORDER", Icon="●", Items={RecordBtn, LoopBtn, StopBtn, ListBtn}},
+            {Name="LOCATIONS", Icon="◆", Items={LocationsBtn}},
+            {Name="MOVEMENT", Icon="»", Items={MovementBtn}},
+            {Name="PLAYERS", Icon="◎", Items={PlayersBtn}},
+            {Name="ESP", Icon="◇", Items={ESPMainBtn, ESPColorBtn}},
+            {Name="AIM", Icon="⊙", Items={aimBtn, aimSettingsBtn}},
+            {Name="PROFILES", Icon="▣", Items={ProfilesBtn}},
+            {Name="INFO", Icon="i", Items={InfoBtn}},
+        }
+
+        local navButtons = {}
+        local activeCategory = nil
+
+        local function layoutVisibleCards(items)
+            local valid = {}
+            for _, card in ipairs(items or {}) do
+                if card and card.Parent then table.insert(valid, card) end
+            end
+
+            if #valid == 1 then
+                valid[1].Position = UDim2.new(0, 0, 0, 48)
+                valid[1].Size = UDim2.new(0, 570, 0, 92)
+            elseif #valid == 2 then
+                valid[1].Position = UDim2.new(0, 0, 0, 48)
+                valid[1].Size = UDim2.new(0, 280, 0, 92)
+                valid[2].Position = UDim2.new(0, 290, 0, 48)
+                valid[2].Size = UDim2.new(0, 280, 0, 92)
+            else
+                for i, card in ipairs(valid) do
+                    local col = (i - 1) % 2
+                    local row = math.floor((i - 1) / 2)
+                    card.Position = UDim2.new(0, col * 290, 0, 48 + row * 104)
+                    card.Size = UDim2.new(0, 280, 0, 92)
+                end
+            end
+        end
+
+        local function selectCategory(index)
+            local category = categories[index]
+            if not category then return end
+            activeCategory = index
+
+            for _, card in ipairs(allCards) do
+                if card and card.Parent then card.Visible = false end
+            end
+            for _, card in ipairs(category.Items) do
+                if card and card.Parent then card.Visible = true end
+            end
+
+            if SectionTitle and SectionTitle.Parent then
+                SectionTitle.Text = category.Name
+                SectionTitle.Position = UDim2.new(0, 2, 0, 10)
+            end
+
+            layoutVisibleCards(category.Items)
+
+            for i, nav in ipairs(navButtons) do
+                if nav and nav.Parent then
+                    local selected = (i == index)
+                    nav.BackgroundColor3 = selected and Color3.fromRGB(38,18,61) or Color3.fromRGB(11,8,19)
+                    local stroke = nav:FindFirstChildOfClass("UIStroke")
+                    if stroke then
+                        stroke.Color = selected and Color3.fromRGB(176,104,255) or Color3.fromRGB(42,31,61)
+                        stroke.Transparency = selected and 0.18 or 0.55
+                    end
+                    local icon = nav:FindFirstChild("NavIcon")
+                    local label = nav:FindFirstChild("NavLabel")
+                    if icon then icon.TextColor3 = selected and Color3.fromRGB(190,116,255) or Color3.fromRGB(130,122,145) end
+                    if label then label.TextColor3 = selected and Color3.fromRGB(242,238,248) or Color3.fromRGB(130,122,145) end
+                end
+            end
+        end
+
+        for i, category in ipairs(categories) do
+            local nav = Instance.new("TextButton")
+            nav.Name = "Style4Nav_" .. category.Name
+            nav.Size = UDim2.new(1,-24,0,40)
+            nav.Position = UDim2.new(0,12,0,188 + (i-1)*46)
+            nav.BackgroundColor3 = Color3.fromRGB(11,8,19)
+            nav.BorderSizePixel = 0
+            nav.Text = ""
+            nav.AutoButtonColor = false
+            nav.Parent = Sidebar
+            Corner(nav, 10)
+            Stroke(nav, Color3.fromRGB(42,31,61), 0.55)
+
+            local icon = Text(nav, category.Icon, UDim2.new(0,32,1,0), UDim2.new(0,10,0,0), Enum.Font.GothamBold, 14, Color3.fromRGB(130,122,145), Enum.TextXAlignment.Center)
+            icon.Name = "NavIcon"
+            local label = Text(nav, category.Name, UDim2.new(1,-52,1,0), UDim2.new(0,48,0,0), Enum.Font.GothamBold, 10, Color3.fromRGB(130,122,145))
+            label.Name = "NavLabel"
+
+            nav.MouseButton1Click:Connect(function()
+                selectCategory(i)
+            end)
+            table.insert(navButtons, nav)
+        end
+
+        -- Exit stays available on every category.
+        if CloseBtn and CloseBtn.Parent then
+            CloseBtn.Visible = true
+            CloseBtn.Position = UDim2.new(0,0,0,420)
+            CloseBtn.Size = UDim2.new(0,570,0,48)
+            CloseBtn.BackgroundColor3 = Color3.fromRGB(9, 11, 20)
+            Corner(CloseBtn, 14)
+        end
+
+        -- Recorder is the first page on startup.
+        selectCategory(1)
+
+        -- Only reveal the menu AFTER Style 4 is completely built.
+        -- This is the important part that stops the old shell appearing first.
+        if ScreenGui and ScreenGui.Parent and not VantageLicense.GateOpen then
+            ScreenGui.Enabled = true
+            MainMenu.Visible = true
+            MenuOpen = true
+        end
+    end)
+
+    if not ok then
+        warn("VANTAGE STYLE 4 CATEGORY LAYOUT DISABLED: " .. tostring(err))
+
+        -- Safe fallback: if Style 4 itself fails, reveal the base menu instead of leaving nothing visible.
+        pcall(function()
+            if ScreenGui and ScreenGui.Parent and not VantageLicense.GateOpen then
+                ScreenGui.Enabled = true
+                if MainMenu and MainMenu.Parent then
+                    MainMenu.Visible = true
+                    MenuOpen = true
+                end
+            end
+        end)
+    end
+end)
+
+-- Click sound is deliberately isolated from UI creation.
+task.defer(function()
+    local ok, err = pcall(function()
+        if not ScreenGui or not ScreenGui.Parent then return end
+        local clickSound = Instance.new("Sound")
+        clickSound.Name = "VantageMenuClick"
+        clickSound.SoundId = "rbxassetid://6026984224"
+        clickSound.Volume = 0.25
+        clickSound.PlaybackSpeed = 1.05
+        clickSound.Parent = ScreenGui
+
+        local function bind(obj)
+            if not obj or not obj.Parent then return end
+            if not (obj:IsA("TextButton") or obj:IsA("ImageButton")) then return end
+            if obj:GetAttribute("VantageClickSoundBound") then return end
+            obj:SetAttribute("VantageClickSoundBound", true)
+            obj.MouseButton1Click:Connect(function()
+                pcall(function()
+                    clickSound.TimePosition = 0
+                    clickSound:Play()
+                end)
+            end)
+        end
+
+        for _, obj in ipairs(ScreenGui:GetDescendants()) do bind(obj) end
+        ScreenGui.DescendantAdded:Connect(function(obj)
+            task.defer(function() pcall(bind, obj) end)
+        end)
+    end)
+    if not ok then
+        warn("VANTAGE CLICK SOUND DISABLED: " .. tostring(err))
     end
 end)
