@@ -13,7 +13,6 @@ local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
-print("[VANTAGE BOOT] 01 - services ready")
 
 
 -- ============================================
@@ -2695,7 +2694,7 @@ function VantageLogger.Request(payload)
         return false
     end
 
-    local requestFn = request or http_request
+    local requestFn = request or http_request or (syn and syn.request)
     if not requestFn then return false end
 
     local headers = {["Content-Type"] = "application/json"}
@@ -2838,8 +2837,6 @@ function VantageLogger.SessionSummary(reason)
 end
 
 
-print("[VANTAGE BOOT] 02 - core loaded")
-
 -- ============================================
 -- VANTAGE LICENSE GATE
 -- Set this to your deployed API URL, e.g. https://your-domain.example
@@ -2858,7 +2855,7 @@ VantageLicense = VantageLicense or {
 }
 
 function VantageLicense.Request(method, path, body)
-    local requestFn = request or http_request
+    local requestFn = request or http_request or (syn and syn.request)
     if not requestFn then
         return false, "This executor does not expose an HTTP request function."
     end
@@ -3112,12 +3109,19 @@ function VantageLicense.StartHeartbeat()
 end
 
 function VantageLicense.IsKeyRequired()
-    local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
+    -- Always read the live server value. Nothing from a previous NO-KEY run is trusted.
+    local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode?ts=" .. tostring(os.time()), nil, 3)
     if ok and type(result) == "table" and result.require_key ~= nil then
-        return result.require_key == true
+        local value = result.require_key
+        if value == true or value == 1 or value == "1" or tostring(value):lower() == "true" then
+            return true
+        end
+        if value == false or value == 0 or value == "0" or tostring(value):lower() == "false" then
+            return false
+        end
     end
 
-    -- Safe fallback: if the mode endpoint cannot be reached, keep requiring a key.
+    -- Fail closed: if mode cannot be confirmed, require a key.
     return true
 end
 
@@ -3156,10 +3160,11 @@ function VantageLicense.StartModeWatch()
         local lastMode = nil
 
         while VantageLicense.ModeWatchRunning do
-            local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
+            local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode?ts=" .. tostring(os.time()), nil, 3)
 
             if ok and type(result) == "table" and result.require_key ~= nil then
-                local requireKey = result.require_key == true
+                local rawMode = result.require_key
+                local requireKey = (rawMode == true or rawMode == 1 or rawMode == "1" or tostring(rawMode):lower() == "true")
 
                 if lastMode == nil or lastMode ~= requireKey then
                     lastMode = requireKey
@@ -3374,8 +3379,10 @@ end
 -- Watch KEY / NO-KEY mode continuously in both directions.
 VantageLicense.StartModeWatch()
 
-print("[VANTAGE BOOT] 03 - checking license mode")
-if VantageLicense.IsKeyRequired() then
+local VantageRequireKeyNow = VantageLicense.IsKeyRequired()
+print("[VANTAGE LICENSE] live require_key =", VantageRequireKeyNow)
+
+if VantageRequireKeyNow then
     local savedKey = VantageLicense.LoadKey()
     local autoGranted = false
 
@@ -3398,8 +3405,6 @@ else
     VantageLicense.ExpiresAt = nil
 end
 
-print("[VANTAGE BOOT] 05 - license stage complete")
-
 pcall(function()
     VantageLogger.Send(
         "بدأت الجلسة",
@@ -3408,8 +3413,6 @@ pcall(function()
     )
 end)
 
-
-print("[VANTAGE BOOT] 06 - building UI")
 
 local T = {
     Black = Color3.fromRGB(5, 5, 9),
@@ -6504,10 +6507,4 @@ task.defer(function()
     if not ok then
         warn("VANTAGE CLICK SOUND DISABLED: " .. tostring(err))
     end
-end)
-
-
-task.defer(function()
-    task.wait(1)
-    print("[VANTAGE BOOT] 07 - startup completed")
 end)
