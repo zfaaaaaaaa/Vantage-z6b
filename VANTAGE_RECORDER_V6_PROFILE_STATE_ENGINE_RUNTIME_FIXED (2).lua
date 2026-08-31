@@ -13,47 +13,28 @@ local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
+print("[VANTAGE BOOT] 01 - services ready")
 
 
 -- ============================================
--- HARD SINGLE-INSTANCE CLEANUP
--- Removes every old VANTAGE/Recorder ScreenGui before this run starts.
+-- VANTAGE-ONLY SINGLE-INSTANCE CLEANUP
+-- Minimal compatibility fix: only exact VANTAGE ScreenGui names are touched.
 -- ============================================
 pcall(function()
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local ownedNames = {
+        VantageRecorderUI = true,
+        VantageLicenseGate = true,
+        VantageAimOverlay = true,
+    }
 
     for _, child in ipairs(playerGui:GetChildren()) do
-        if child:IsA("ScreenGui") then
-            local n = string.lower(child.Name)
-            if n == "vantagerecorderui"
-                or n == "vantagelicensegate"
-                or n == "vantageaimoverlay"
-                or n == "recorderui"
-                or string.find(n, "vantage", 1, true)
-            then
-                pcall(function() child:Destroy() end)
-            end
+        if child:IsA("ScreenGui") and ownedNames[child.Name] then
+            pcall(function()
+                child:Destroy()
+            end)
         end
     end
-
-    -- In case an older build parented one of these directly under PlayerGui.
-    local directNames = {
-        "MainMenu", "RecordingLibrary", "PlayerList", "MovementFrame",
-        "LocationsFrame", "ProfilesFrame", "AimSettings", "ESPColorFrame",
-        "PerformanceHUD"
-    }
-    for _, guiName in ipairs(directNames) do
-        local obj = playerGui:FindFirstChild(guiName)
-        if obj then
-            pcall(function() obj:Destroy() end)
-        end
-    end
-end)
-
--- Global run token. New executions invalidate the previous run's delayed tasks.
-pcall(function()
-    local env = (getgenv and getgenv()) or _G
-    env.__VANTAGE_RUN_ID = (tonumber(env.__VANTAGE_RUN_ID) or 0) + 1
 end)
 
 -- ============================================
@@ -2665,12 +2646,8 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Enabled = true
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Keep exactly this ScreenGui alive. Older async runs sometimes recreate a
--- second menu after the initial cleanup, so sweep duplicates for a few seconds.
+-- Minimal duplicate sweep: only exact VANTAGE-owned ScreenGui names.
 pcall(function()
-    local env = (getgenv and getgenv()) or _G
-    env.__VANTAGE_CURRENT_GUI = ScreenGui
-
     task.spawn(function()
         for _ = 1, 20 do
             task.wait(0.25)
@@ -2681,10 +2658,9 @@ pcall(function()
 
             for _, child in ipairs(playerGui:GetChildren()) do
                 if child:IsA("ScreenGui") and child ~= ScreenGui then
-                    local n = string.lower(child.Name)
-                    if n == "vantagerecorderui"
-                        or n == "recorderui"
-                        or string.find(n, "vantage", 1, true)
+                    if child.Name == "VantageRecorderUI"
+                        or child.Name == "VantageLicenseGate"
+                        or child.Name == "VantageAimOverlay"
                     then
                         pcall(function() child:Destroy() end)
                     end
@@ -2719,7 +2695,7 @@ function VantageLogger.Request(payload)
         return false
     end
 
-    local requestFn = request or http_request or (syn and syn.request)
+    local requestFn = request or http_request
     if not requestFn then return false end
 
     local headers = {["Content-Type"] = "application/json"}
@@ -2862,6 +2838,8 @@ function VantageLogger.SessionSummary(reason)
 end
 
 
+print("[VANTAGE BOOT] 02 - core loaded")
+
 -- ============================================
 -- VANTAGE LICENSE GATE
 -- Set this to your deployed API URL, e.g. https://your-domain.example
@@ -2880,7 +2858,7 @@ VantageLicense = VantageLicense or {
 }
 
 function VantageLicense.Request(method, path, body)
-    local requestFn = request or http_request or (syn and syn.request)
+    local requestFn = request or http_request
     if not requestFn then
         return false, "This executor does not expose an HTTP request function."
     end
@@ -3396,6 +3374,7 @@ end
 -- Watch KEY / NO-KEY mode continuously in both directions.
 VantageLicense.StartModeWatch()
 
+print("[VANTAGE BOOT] 03 - checking license mode")
 if VantageLicense.IsKeyRequired() then
     local savedKey = VantageLicense.LoadKey()
     local autoGranted = false
@@ -3419,6 +3398,8 @@ else
     VantageLicense.ExpiresAt = nil
 end
 
+print("[VANTAGE BOOT] 05 - license stage complete")
+
 pcall(function()
     VantageLogger.Send(
         "بدأت الجلسة",
@@ -3427,6 +3408,8 @@ pcall(function()
     )
 end)
 
+
+print("[VANTAGE BOOT] 06 - building UI")
 
 local T = {
     Black = Color3.fromRGB(5, 5, 9),
@@ -6521,4 +6504,10 @@ task.defer(function()
     if not ok then
         warn("VANTAGE CLICK SOUND DISABLED: " .. tostring(err))
     end
+end)
+
+
+task.defer(function()
+    task.wait(1)
+    print("[VANTAGE BOOT] 07 - startup completed")
 end)
