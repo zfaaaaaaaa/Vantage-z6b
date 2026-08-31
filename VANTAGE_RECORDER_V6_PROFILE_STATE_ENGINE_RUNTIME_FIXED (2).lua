@@ -3127,20 +3127,42 @@ function VantageLicense.StartHeartbeat()
 end
 
 function VantageLicense.IsKeyRequired()
-    -- Always read the live server value. Nothing from a previous NO-KEY run is trusted.
-    local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode?ts=" .. tostring(os.time()), nil, 3)
-    if ok and type(result) == "table" and result.require_key ~= nil then
-        local value = result.require_key
-        if value == true or value == 1 or value == "1" or tostring(value):lower() == "true" then
+    -- Fail closed. KEY MODE wins immediately.
+    -- NO-KEY is accepted only after 3 fresh successful server confirmations.
+    local noKeyConfirmations = 0
+
+    for i = 1, 3 do
+        local nonce = tostring(os.time()) .. "-" .. tostring(i) .. "-" .. HttpService:GenerateGUID(false)
+        local ok, result = VantageLicense.RequestTimed(
+            "GET",
+            "/v1/license/mode?ts=" .. nonce,
+            nil,
+            3
+        )
+
+        if not ok or type(result) ~= "table" or result.require_key == nil then
             return true
         end
-        if value == false or value == 0 or value == "0" or tostring(value):lower() == "false" then
-            return false
+
+        local raw = result.require_key
+        local requireKey = (
+            raw == true
+            or raw == 1
+            or raw == "1"
+            or tostring(raw):lower() == "true"
+        )
+
+        if requireKey then
+            return true
+        end
+
+        noKeyConfirmations = noKeyConfirmations + 1
+        if i < 3 then
+            task.wait(0.20)
         end
     end
 
-    -- Fail closed: if mode cannot be confirmed, require a key.
-    return true
+    return noKeyConfirmations ~= 3
 end
 
 function VantageLicense.SetNoKeyAccess()
@@ -3177,37 +3199,63 @@ function VantageLicense.StartModeWatch()
 
     task.spawn(function()
         local lastMode = nil
+        local noKeyStreak = 0
 
         while VantageLicense.RunToken == myRunToken
             and VantageLicense.ModeWatchRunning do
-            local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode?ts=" .. tostring(os.time()), nil, 3)
+
+            local nonce = tostring(os.time()) .. "-" .. HttpService:GenerateGUID(false)
+            local ok, result = VantageLicense.RequestTimed(
+                "GET",
+                "/v1/license/mode?ts=" .. nonce,
+                nil,
+                3
+            )
 
             if ok and type(result) == "table" and result.require_key ~= nil then
-                local rawMode = result.require_key
-                local requireKey = (rawMode == true or rawMode == 1 or rawMode == "1" or tostring(rawMode):lower() == "true")
+                local raw = result.require_key
+                local requireKey = (
+                    raw == true
+                    or raw == 1
+                    or raw == "1"
+                    or tostring(raw):lower() == "true"
+                )
 
-                if lastMode == nil or lastMode ~= requireKey then
-                    lastMode = requireKey
+                if requireKey then
+                    noKeyStreak = 0
 
-                    if requireKey then
-                        if not VantageLicense.SessionToken then
-                            if ScreenGui and ScreenGui.Parent then
-                                ScreenGui.Enabled = false
-                            end
+                    -- KEY MODE locks the main menu immediately unless this run
+                    -- already has a validated server session.
+                    if lastMode ~= true then
+                        lastMode = true
+                    end
 
-                            if not VantageLicense.GateOpen then
-                                task.spawn(function()
-                                    VantageLicense.ShowGate("تم تفعيل وضع الكي. أدخل كي VANTAGE فعال.")
-                                end)
-                            end
+                    if not VantageLicense.SessionToken then
+                        if ScreenGui and ScreenGui.Parent then
+                            ScreenGui.Enabled = false
                         end
-                    else
+
+                        if not VantageLicense.GateOpen then
+                            task.spawn(function()
+                                VantageLicense.ShowGate("KEY MODE is enabled. Enter an active VANTAGE key.")
+                            end)
+                        end
+                    end
+                else
+                    noKeyStreak = noKeyStreak + 1
+
+                    -- Never unlock from one stale NO-KEY response.
+                    if noKeyStreak >= 3 and lastMode ~= false then
+                        lastMode = false
                         VantageLicense.SetNoKeyAccess()
                     end
                 end
+            else
+                -- Network/API uncertainty must never unlock KEY MODE.
+                noKeyStreak = 0
             end
 
-            task.wait(2)
+            task.wait(1)
         end
     end)
 end
@@ -3417,6 +3465,9 @@ if VantageRequireKeyNow then
     end
 
     if not autoGranted then
+        if ScreenGui and ScreenGui.Parent then
+            ScreenGui.Enabled = false
+        end
         VantageLicense.ShowGate()
     end
 else
