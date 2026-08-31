@@ -2657,10 +2657,9 @@ pcall(function()
 
             for _, child in ipairs(playerGui:GetChildren()) do
                 if child:IsA("ScreenGui") and child ~= ScreenGui then
-                    if child.Name == "VantageRecorderUI"
-                        or child.Name == "VantageLicenseGate"
-                        or child.Name == "VantageAimOverlay"
-                    then
+                    -- Only the main VANTAGE menu is a duplicate here.
+                    -- LicenseGate/AimOverlay are legitimate separate ScreenGuis.
+                    if child.Name == "VantageRecorderUI" then
                         pcall(function() child:Destroy() end)
                     end
                 end
