@@ -2637,36 +2637,8 @@ end
 -- CREATE GUI - VANTAGE MINIMAL NAVY
 -- ============================================
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "VantageRecorderUI"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.IgnoreGuiInset = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Enabled = true
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
--- Minimal duplicate sweep: only exact VANTAGE-owned ScreenGui names.
-pcall(function()
-    task.spawn(function()
-        for _ = 1, 20 do
-            task.wait(0.25)
-            if not ScreenGui or not ScreenGui.Parent then return end
-
-            local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-            if not playerGui then return end
-
-            for _, child in ipairs(playerGui:GetChildren()) do
-                if child:IsA("ScreenGui") and child ~= ScreenGui then
-                    -- Only the main VANTAGE menu is a duplicate here.
-                    -- LicenseGate/AimOverlay are legitimate separate ScreenGuis.
-                    if child.Name == "VantageRecorderUI" then
-                        pcall(function() child:Destroy() end)
-                    end
-                end
-            end
-        end
-    end)
-end)
+local ScreenGui = nil
+local VantageAccessGranted = false
 
 local TweenService = game:GetService("TweenService")
 
@@ -3444,37 +3416,109 @@ function VantageLicense.ShowGate(initialMessage)
     pcall(function() done:Destroy() end)
 end
 
--- Watch KEY / NO-KEY mode continuously in both directions.
-VantageLicense.StartModeWatch()
+-- ============================================================
+-- SERVER-GATED BOOT BARRIER
+-- Main VANTAGE UI is not created until this run is authorized.
+-- ============================================================
 
-local VantageRequireKeyNow = VantageLicense.IsKeyRequired()
-print("[VANTAGE LICENSE] live require_key =", VantageRequireKeyNow)
+local function VantageAuthorizeThisRun()
+    local requireKey = VantageLicense.IsKeyRequired()
+    print("[VANTAGE LICENSE] live require_key =", requireKey)
 
-if VantageRequireKeyNow then
-    local savedKey = VantageLicense.LoadKey()
-    local autoGranted = false
+    if requireKey then
+        -- Preserve auto-grant, but only after a fresh server validation that
+        -- returns a session token for THIS run.
+        local savedKey = VantageLicense.LoadKey()
 
-    if savedKey then
-        local ok, result, status = VantageLicense.Validate(savedKey)
-        if ok then
-            autoGranted = true
-            VantageLicense.StartHeartbeat()
-        elseif status == 401 or status == 403 or status == 404 then
-            VantageLicense.ClearSavedKey()
+        if savedKey and savedKey ~= "" then
+            local ok, result, status = VantageLicense.Validate(savedKey)
+            if ok and VantageLicense.SessionToken then
+                -- Prove the freshly issued session is live before boot.
+                local hbOk, hbResult = VantageLicense.RequestTimed(
+                    "POST",
+                    "/v1/session/heartbeat",
+                    {user_id = LocalPlayer.UserId},
+                    3
+                )
+                if hbOk and type(hbResult) == "table" and hbResult.ok == true then
+                    VantageLicense.StartHeartbeat()
+                    return true
+                end
+                VantageLicense.SessionToken = nil
+            end
+
+            if status == 401 or status == 403 or status == 404 then
+                VantageLicense.ClearSavedKey()
+            end
         end
-    end
 
-    if not autoGranted then
-        if ScreenGui and ScreenGui.Parent then
-            ScreenGui.Enabled = false
-        end
+        -- No valid session: block here on the key gate.
         VantageLicense.ShowGate()
+
+        -- The gate itself is not authorization. Re-check server state.
+        local stillRequiresKey = VantageLicense.IsKeyRequired()
+        if stillRequiresKey then
+            if not VantageLicense.SessionToken then
+                return false
+            end
+
+            local hbOk, hbResult = VantageLicense.RequestTimed(
+                "POST",
+                "/v1/session/heartbeat",
+                {user_id = LocalPlayer.UserId},
+                3
+            )
+            if not hbOk or type(hbResult) ~= "table" or hbResult.ok ~= true then
+                VantageLicense.SessionToken = nil
+                return false
+            end
+
+            VantageLicense.StartHeartbeat()
+        else
+            VantageLicense.SetNoKeyAccess()
+        end
+
+        return true
     end
-else
-    VantageLicense.Key = nil
-    VantageLicense.Plan = "NO KEY MODE"
-    VantageLicense.ExpiresAt = nil
+
+    -- IsKeyRequired accepts NO-KEY only after 3 fresh successful responses.
+    VantageLicense.SetNoKeyAccess()
+    return true
 end
+
+VantageAccessGranted = VantageAuthorizeThisRun()
+
+-- FAIL CLOSED. No server grant = no VANTAGE main UI at all.
+if not VantageAccessGranted then
+    warn("[VANTAGE LICENSE] Authorization failed. Main UI was not created.")
+    return
+end
+
+-- Create the main GUI only AFTER authorization.
+ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "VantageRecorderUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Enabled = true
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Remove only an older main-menu instance.
+pcall(function()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if playerGui then
+        for _, child in ipairs(playerGui:GetChildren()) do
+            if child:IsA("ScreenGui")
+                and child ~= ScreenGui
+                and child.Name == "VantageRecorderUI" then
+                child:Destroy()
+            end
+        end
+    end
+end)
+
+-- Monitor mode/revocation only after this run has passed the boot barrier.
+VantageLicense.StartModeWatch()
 
 pcall(function()
     VantageLogger.Send(
