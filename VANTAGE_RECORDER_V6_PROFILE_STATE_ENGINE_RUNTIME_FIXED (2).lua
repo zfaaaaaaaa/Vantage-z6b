@@ -2840,7 +2840,20 @@ end
 -- VANTAGE LICENSE GATE
 -- Set this to your deployed API URL, e.g. https://your-domain.example
 -- ============================================
-VantageLicense = VantageLicense or {
+-- Repeated executor Runs can preserve globals from the previous run.
+-- Reset transient license state so a second Run can never inherit GateOpen/session state.
+if VantageLicense then
+    pcall(function()
+        VantageLicense.HeartbeatRunning = false
+        VantageLicense.ModeWatchRunning = false
+        VantageLicense.GateOpen = false
+        if VantageLicense.GateGui and VantageLicense.GateGui.Parent then
+            VantageLicense.GateGui:Destroy()
+        end
+    end)
+end
+
+VantageLicense = {
     ApiBase = "https://workflow-attachments-promises-worcester.trycloudflare.com",
     SessionToken = nil,
     Key = nil,
@@ -2849,8 +2862,11 @@ VantageLicense = VantageLicense or {
     HeartbeatRunning = false,
     ModeWatchRunning = false,
     GateOpen = false,
+    GateGui = nil,
+    GateDone = nil,
     LicenseFolder = "VantageLicense",
     LicenseFile = "VantageLicense/license.json",
+    RunToken = HttpService:GenerateGUID(false),
 }
 
 function VantageLicense.Request(method, path, body)
@@ -3078,8 +3094,11 @@ function VantageLicense.StartHeartbeat()
     end
 
     VantageLicense.HeartbeatRunning = true
+    local myRunToken = VantageLicense.RunToken
     task.spawn(function()
-        while VantageLicense.HeartbeatRunning and VantageLicense.SessionToken do
+        while VantageLicense.RunToken == myRunToken
+            and VantageLicense.HeartbeatRunning
+            and VantageLicense.SessionToken do
             local ok, result, status = VantageLicense.RequestTimed("POST", "/v1/session/heartbeat", {
                 place_id = tostring(game.PlaceId),
                 job_id = tostring(game.JobId),
@@ -3154,11 +3173,13 @@ end
 function VantageLicense.StartModeWatch()
     if VantageLicense.ModeWatchRunning then return end
     VantageLicense.ModeWatchRunning = true
+    local myRunToken = VantageLicense.RunToken
 
     task.spawn(function()
         local lastMode = nil
 
-        while VantageLicense.ModeWatchRunning do
+        while VantageLicense.RunToken == myRunToken
+            and VantageLicense.ModeWatchRunning do
             local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode?ts=" .. tostring(os.time()), nil, 3)
 
             if ok and type(result) == "table" and result.require_key ~= nil then
