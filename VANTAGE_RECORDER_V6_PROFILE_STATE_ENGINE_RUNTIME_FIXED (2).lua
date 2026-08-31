@@ -14,28 +14,46 @@ local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
--- Private state container: avoids polluting _G/getgenv and other scripts.\nlocal VantageRuntime = {}\n
 
 -- ============================================
--- VANTAGE-ONLY SINGLE-INSTANCE CLEANUP
--- Only exact GUI names created by this script are touched.
--- No generic MainMenu / PlayerList / RecorderUI cleanup.
+-- HARD SINGLE-INSTANCE CLEANUP
+-- Removes every old VANTAGE/Recorder ScreenGui before this run starts.
 -- ============================================
 pcall(function()
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-    local ownedNames = {
-        VantageRecorderUI = true,
-        VantageLicenseGate = true,
-        VantageAimOverlay = true,
-    }
 
     for _, child in ipairs(playerGui:GetChildren()) do
-        if child:IsA("ScreenGui") and ownedNames[child.Name] then
-            pcall(function()
-                child:Destroy()
-            end)
+        if child:IsA("ScreenGui") then
+            local n = string.lower(child.Name)
+            if n == "vantagerecorderui"
+                or n == "vantagelicensegate"
+                or n == "vantageaimoverlay"
+                or n == "recorderui"
+                or string.find(n, "vantage", 1, true)
+            then
+                pcall(function() child:Destroy() end)
+            end
         end
     end
+
+    -- In case an older build parented one of these directly under PlayerGui.
+    local directNames = {
+        "MainMenu", "RecordingLibrary", "PlayerList", "MovementFrame",
+        "LocationsFrame", "ProfilesFrame", "AimSettings", "ESPColorFrame",
+        "PerformanceHUD"
+    }
+    for _, guiName in ipairs(directNames) do
+        local obj = playerGui:FindFirstChild(guiName)
+        if obj then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+end)
+
+-- Global run token. New executions invalidate the previous run's delayed tasks.
+pcall(function()
+    local env = (getgenv and getgenv()) or _G
+    env.__VANTAGE_RUN_ID = (tonumber(env.__VANTAGE_RUN_ID) or 0) + 1
 end)
 
 -- ============================================
@@ -127,12 +145,12 @@ local espColorPromptOpen = false
 
 -- BOT/NPC ESP state intentionally stored in one global table.
 -- This avoids adding top-level locals to this already-large Luau chunk.
-VantageRuntime.BotRadar = VantageRuntime.BotRadar or {
+VantageBotRadar = VantageBotRadar or {
     Objects = {},
     Elapsed = 0,
 }
 
-VantageRuntime.MonsterSafe = VantageRuntime.MonsterSafe or {
+VantageMonsterSafe = VantageMonsterSafe or {
     Enabled = false,
     Original = {},
     DisabledModels = {},
@@ -140,8 +158,8 @@ VantageRuntime.MonsterSafe = VantageRuntime.MonsterSafe or {
     Elapsed = 0,
 }
 
-VantageRuntime.MonsterSafe.DisabledModels = VantageRuntime.MonsterSafe.DisabledModels or {}
-VantageRuntime.MonsterSafe.ManualTargets = VantageRuntime.MonsterSafe.ManualTargets or {}
+VantageMonsterSafe.DisabledModels = VantageMonsterSafe.DisabledModels or {}
+VantageMonsterSafe.ManualTargets = VantageMonsterSafe.ManualTargets or {}
 
 
 local savedLocations = {}
@@ -280,7 +298,7 @@ local function LoadLocationsFile()
 end
 
 local function SaveCurrentLocation(name, exactCFrame)
-    VantageRuntime.Logger.Send("تم حفظ الموقع", "تم حفظ الموقع الحالي بنجاح.", "LOCATION")
+    VantageLogger.Send("تم حفظ الموقع", "تم حفظ الموقع الحالي بنجاح.", "LOCATION")
     name = SanitizeLocationName(name)
     if not name then
         warn("VANTAGE: Invalid location name.")
@@ -310,7 +328,7 @@ local function SaveCurrentLocation(name, exactCFrame)
 end
 
 local function TeleportToLocation(name)
-    VantageRuntime.Logger.Send("انتقال إلى موقع محفوظ", "الموقع: **" .. tostring(name) .. "**", "LOCATION")
+    VantageLogger.Send("انتقال إلى موقع محفوظ", "الموقع: **" .. tostring(name) .. "**", "LOCATION")
     local data = savedLocations[name]
     local root = GetRoot()
 
@@ -681,7 +699,7 @@ local function CaptureCurrentProfile()
 end
 
 local function SaveProfile(name)
-    VantageRuntime.Logger.Send("تم حفظ الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
+    VantageLogger.Send("تم حفظ الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
     name = SanitizeProfileName(name)
     if not name then return false end
 
@@ -699,7 +717,7 @@ end
 local ApplyProfile
 
 local function DeleteProfile(name)
-    VantageRuntime.Logger.Send("تم حذف الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
+    VantageLogger.Send("تم حذف الملف الشخصي", "اسم الملف: **" .. tostring(name) .. "**", "PROFILE")
     if not savedProfiles[name] then return false end
     savedProfiles[name] = nil
     if activeProfileName == name then
@@ -872,32 +890,32 @@ local function StartRecording()
     lastTime = tick()
 
     recording = true
-    VantageRuntime.Logger.Send("بدأ التسجيل", "بدأ تسجيل الحركة.", "RECORD")
+    VantageLogger.Send("بدأ التسجيل", "بدأ تسجيل الحركة.", "RECORD")
 
     print("Recording started.")
 
-    VantageRuntime.RecordBtn.Text = "● RECORDING..."
+    RecordBtn.Text = "● RECORDING..."
 
-    VantageRuntime.RecordBtn.BackgroundColor3 = Color3.fromRGB(30, 80, 30)
+    RecordBtn.BackgroundColor3 = Color3.fromRGB(30, 80, 30)
 
-    VantageRuntime.RecordBtn.BorderColor3 = Color3.fromRGB(80, 255, 80)
+    RecordBtn.BorderColor3 = Color3.fromRGB(80, 255, 80)
 
 end
 
 local function StopRecording()
 
     recording = false
-    VantageRuntime.Logger.Send("توقف التسجيل", "عدد الإطارات المسجلة: **" .. tostring(#recordedData) .. "**", "RECORD")
+    VantageLogger.Send("توقف التسجيل", "عدد الإطارات المسجلة: **" .. tostring(#recordedData) .. "**", "RECORD")
 
     if #recordedData == 0 then
 
         print("ERROR: No movement was recorded.")
 
-        VantageRuntime.RecordBtn.Text = "● START RECORDING"
+        RecordBtn.Text = "● START RECORDING"
 
-        VantageRuntime.RecordBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        RecordBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
 
-        VantageRuntime.RecordBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        RecordBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
 
         return
 
@@ -947,11 +965,11 @@ local function StopRecording()
 
     end
 
-    VantageRuntime.RecordBtn.Text = "● START RECORDING"
+    RecordBtn.Text = "● START RECORDING"
 
-    VantageRuntime.RecordBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+    RecordBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
 
-    VantageRuntime.RecordBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+    RecordBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
 
     UpdateList()
 
@@ -963,9 +981,9 @@ end
 
 -- ============================================
 
-VantageRuntime.RecordingFrame = VantageRuntime.RecordingFrame or {}
+VantageRecordingFrame = VantageRecordingFrame or {}
 
-function VantageRuntime.RecordingFrame.Apply(rootPart, move)
+function VantageRecordingFrame.Apply(rootPart, move)
     if not rootPart or type(move) ~= "table" then
         return false
     end
@@ -1028,7 +1046,7 @@ local function PlayRecording(name)
     end
 
     -- Exact first frame. Old recordings fall back to StartPosition.
-    if not VantageRuntime.RecordingFrame.Apply(root, data.Movements[1]) and data.StartPosition then
+    if not VantageRecordingFrame.Apply(root, data.Movements[1]) and data.StartPosition then
         local p = data.StartPosition
         local x = tonumber(p.X or p.x or p[1])
         local y = tonumber(p.Y or p.y or p[2])
@@ -1040,7 +1058,7 @@ local function PlayRecording(name)
     end
 
     playing = true
-    VantageRuntime.Logger.Send("بدأ تشغيل التسجيل", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
+    VantageLogger.Send("بدأ تشغيل التسجيل", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
     print("▶️ PLAY EXACT: " .. tostring(name) .. " | الحركات: " .. tostring(#data.Movements))
 
     task.spawn(function()
@@ -1075,7 +1093,7 @@ local function PlayRecording(name)
                 break
             end
 
-            if not VantageRuntime.RecordingFrame.Apply(rootNow, move) then
+            if not VantageRecordingFrame.Apply(rootNow, move) then
                 print("⚠️ حركة رقم " .. tostring(index) .. " غير صالحة")
             end
         end
@@ -1101,13 +1119,13 @@ local function StopAllPlayback()
 
     currentLoopName = ""
 
-    if VantageRuntime.LoopBtn then
+    if LoopBtn then
 
-        VantageRuntime.LoopBtn.Text = "↻ LOOP PLAYBACK"
+        LoopBtn.Text = "↻ LOOP PLAYBACK"
 
-        VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
 
-        VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
 
     end
 
@@ -1139,9 +1157,9 @@ local function StartLoopPlay(name)
 
     if loopPlaying then
         loopPlaying = false
-        VantageRuntime.LoopBtn.Text = "↻ LOOP PLAYBACK"
-        VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
-        VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        LoopBtn.Text = "↻ LOOP PLAYBACK"
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
         return
     end
 
@@ -1152,11 +1170,11 @@ local function StartLoopPlay(name)
 
     currentLoopName = name
     loopPlaying = true
-    VantageRuntime.Logger.Send("بدأ التشغيل المتكرر", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
+    VantageLogger.Send("بدأ التشغيل المتكرر", "التسجيل: **" .. tostring(name) .. "**\nالسرعة: **" .. tostring((data.PlaybackSpeedEnabled == true and data.PlaybackSpeed) or 1) .. "x**", "PLAYBACK")
 
-    VantageRuntime.LoopBtn.Text = "■ STOP LOOP"
-    VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(55, 22, 29)
-    VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(220, 76, 88)
+    LoopBtn.Text = "■ STOP LOOP"
+    LoopBtn.BackgroundColor3 = Color3.fromRGB(55, 22, 29)
+    LoopBtn.BorderColor3 = Color3.fromRGB(220, 76, 88)
 
     task.spawn(function()
         while loopPlaying do
@@ -1205,7 +1223,7 @@ local function StartLoopPlay(name)
 
                 if not loopPlaying then break end
 
-                VantageRuntime.RecordingFrame.Apply(rootNow, move)
+                VantageRecordingFrame.Apply(rootNow, move)
             end
 
             if loopPlaying then
@@ -1214,9 +1232,9 @@ local function StartLoopPlay(name)
         end
 
         loopPlaying = false
-        VantageRuntime.LoopBtn.Text = "↻ LOOP PLAYBACK"
-        VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
-        VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        LoopBtn.Text = "↻ LOOP PLAYBACK"
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
         print("⏹️ انتهى الLOOP")
     end)
 end
@@ -1241,11 +1259,11 @@ local function DeleteRecording(name)
 
         loopPlaying = false
 
-        VantageRuntime.LoopBtn.Text = "↻ LOOP PLAYBACK"
+        LoopBtn.Text = "↻ LOOP PLAYBACK"
 
-        VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
 
-        VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
 
     end
 
@@ -1277,7 +1295,7 @@ local function GetPlayerHumanoid(player)
 end
 
 local function TeleportToPlayer(player)
-    VantageRuntime.Logger.Send("انتقال إلى لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
+    VantageLogger.Send("انتقال إلى لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
     local myRoot = GetRoot()
     local targetRoot = GetPlayerRoot(player)
     if not myRoot or not targetRoot then
@@ -1288,7 +1306,7 @@ local function TeleportToPlayer(player)
 end
 
 local function StopSpectate()
-    VantageRuntime.Logger.Send("تم إيقاف المشاهدة", "تمت إعادة الكاميرا إلى اللاعب المحلي.", "PLAYER")
+    VantageLogger.Send("تم إيقاف المشاهدة", "تمت إعادة الكاميرا إلى اللاعب المحلي.", "PLAYER")
     spectatingPlayer = nil
 
     if spectateConnection then
@@ -1308,7 +1326,7 @@ local function StopSpectate()
 end
 
 local function StartSpectate(player)
-    VantageRuntime.Logger.Send("بدأت مشاهدة لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
+    VantageLogger.Send("بدأت مشاهدة لاعب", "اللاعب المستهدف: **" .. tostring(player and player.Name or "غير معروف") .. "**", "PLAYER")
     if not player or player == LocalPlayer then
         StopSpectate()
         return
@@ -1613,7 +1631,7 @@ local function StopESPUpdater()
 end
 
 
-function VantageRuntime.BotRadar.IsPlayerCharacter(model)
+function VantageBotRadar.IsPlayerCharacter(model)
     if not model or not model:IsA("Model") then
         return false
     end
@@ -1627,8 +1645,8 @@ function VantageRuntime.BotRadar.IsPlayerCharacter(model)
     return false
 end
 
-function VantageRuntime.BotRadar.Remove(model)
-    local data = VantageRuntime.BotRadar.Objects[model]
+function VantageBotRadar.Remove(model)
+    local data = VantageBotRadar.Objects[model]
     if not data then return end
 
     for _, line in ipairs(data.Lines or {}) do
@@ -1645,10 +1663,10 @@ function VantageRuntime.BotRadar.Remove(model)
         end)
     end
 
-    VantageRuntime.BotRadar.Objects[model] = nil
+    VantageBotRadar.Objects[model] = nil
 end
 
-function VantageRuntime.BotRadar.GetSegments(model)
+function VantageBotRadar.GetSegments(model)
     local humanoid = model and model:FindFirstChildOfClass("Humanoid")
     if not humanoid then return {} end
 
@@ -1678,12 +1696,12 @@ function VantageRuntime.BotRadar.GetSegments(model)
     return {}
 end
 
-function VantageRuntime.BotRadar.Create(model)
+function VantageBotRadar.Create(model)
     if not espEnabled
         or not model
         or not model:IsA("Model")
         or not model.Parent
-        or VantageRuntime.BotRadar.IsPlayerCharacter(model) then
+        or VantageBotRadar.IsPlayerCharacter(model) then
         return false
     end
 
@@ -1695,12 +1713,12 @@ function VantageRuntime.BotRadar.Create(model)
         return false
     end
 
-    local segments = VantageRuntime.BotRadar.GetSegments(model)
+    local segments = VantageBotRadar.GetSegments(model)
     if #segments == 0 then
         return false
     end
 
-    VantageRuntime.BotRadar.Remove(model)
+    VantageBotRadar.Remove(model)
 
     local lines = {}
     for _ = 1, #segments do
@@ -1747,7 +1765,7 @@ function VantageRuntime.BotRadar.Create(model)
     tag.Visible = false
     tag.Parent = espGui
 
-    VantageRuntime.BotRadar.Objects[model] = {
+    VantageBotRadar.Objects[model] = {
         Humanoid = humanoid,
         Root = root,
         Lines = lines,
@@ -1758,7 +1776,7 @@ function VantageRuntime.BotRadar.Create(model)
     return true
 end
 
-function VantageRuntime.BotRadar.Reconcile()
+function VantageBotRadar.Reconcile()
     if not espEnabled then return end
 
     local seen = {}
@@ -1770,7 +1788,7 @@ function VantageRuntime.BotRadar.Reconcile()
             if model
                 and model:IsA("Model")
                 and descendant.Health > 0
-                and not VantageRuntime.BotRadar.IsPlayerCharacter(model) then
+                and not VantageBotRadar.IsPlayerCharacter(model) then
 
                 local root = model:FindFirstChild("HumanoidRootPart")
                     or model:FindFirstChild("HumanoidRootPart", true)
@@ -1778,13 +1796,13 @@ function VantageRuntime.BotRadar.Reconcile()
                 if root then
                     seen[model] = true
 
-                    local data = VantageRuntime.BotRadar.Objects[model]
+                    local data = VantageBotRadar.Objects[model]
                     if not data
                         or data.Humanoid ~= descendant
                         or data.Root ~= root
                         or not data.NameTag
                         or not data.NameTag.Parent then
-                        VantageRuntime.BotRadar.Create(model)
+                        VantageBotRadar.Create(model)
                     end
                 end
             end
@@ -1792,7 +1810,7 @@ function VantageRuntime.BotRadar.Reconcile()
     end
 
     local stale = {}
-    for model, data in pairs(VantageRuntime.BotRadar.Objects) do
+    for model, data in pairs(VantageBotRadar.Objects) do
         if not seen[model]
             or not model
             or not model.Parent
@@ -1803,14 +1821,14 @@ function VantageRuntime.BotRadar.Reconcile()
     end
 
     for _, model in ipairs(stale) do
-        VantageRuntime.BotRadar.Remove(model)
+        VantageBotRadar.Remove(model)
     end
 end
 
-function VantageRuntime.BotRadar.Update(camera, myRoot)
+function VantageBotRadar.Update(camera, myRoot)
     local stale = {}
 
-    for model, data in pairs(VantageRuntime.BotRadar.Objects) do
+    for model, data in pairs(VantageBotRadar.Objects) do
         local humanoid = data.Humanoid
         local root = data.Root
 
@@ -1883,21 +1901,21 @@ function VantageRuntime.BotRadar.Update(camera, myRoot)
     end
 
     for _, model in ipairs(stale) do
-        VantageRuntime.BotRadar.Remove(model)
+        VantageBotRadar.Remove(model)
     end
 end
 
-function VantageRuntime.BotRadar.Clear()
+function VantageBotRadar.Clear()
     local models = {}
-    for model in pairs(VantageRuntime.BotRadar.Objects) do
+    for model in pairs(VantageBotRadar.Objects) do
         table.insert(models, model)
     end
 
     for _, model in ipairs(models) do
-        VantageRuntime.BotRadar.Remove(model)
+        VantageBotRadar.Remove(model)
     end
 
-    VantageRuntime.BotRadar.Elapsed = 0
+    VantageBotRadar.Elapsed = 0
 end
 
 local function StartESPUpdater()
@@ -1916,12 +1934,12 @@ local function StartESPUpdater()
         if not camera then return end
 
         -- BOT/NPC ESP runs inside this SAME updater.
-        VantageRuntime.BotRadar.Elapsed += dt
-        if VantageRuntime.BotRadar.Elapsed >= 0.25 then
-            VantageRuntime.BotRadar.Elapsed = 0
-            VantageRuntime.BotRadar.Reconcile()
+        VantageBotRadar.Elapsed += dt
+        if VantageBotRadar.Elapsed >= 0.25 then
+            VantageBotRadar.Elapsed = 0
+            VantageBotRadar.Reconcile()
         end
-        VantageRuntime.BotRadar.Update(camera, myRoot)
+        VantageBotRadar.Update(camera, myRoot)
 
         -- Reconcile missing ESP entries inside the same updater.
         -- This fixes players whose character/rig was only partially loaded
@@ -2090,7 +2108,7 @@ local function ApplyESPColor(color)
         end
     end
 
-    for _, data in pairs(VantageRuntime.BotRadar.Objects) do
+    for _, data in pairs(VantageBotRadar.Objects) do
         for _, line in ipairs(data.Lines or {}) do
             if line and line.Parent then
                 line.BackgroundColor3 = espColor
@@ -2118,7 +2136,7 @@ local function SetESPEnabled(enabled)
         StopESPUpdater()
         espReconcileElapsed = 0
         RefreshESP()
-        VantageRuntime.BotRadar.Clear()
+        VantageBotRadar.Clear()
     end
 end
 
@@ -2269,7 +2287,7 @@ local function DetachESPCharacterWatcher(player)
 end
 
 
-function VantageRuntime.MonsterSafe.IsPlayerCharacter(model)
+function VantageMonsterSafe.IsPlayerCharacter(model)
     if not model or not model:IsA("Model") then
         return false
     end
@@ -2288,7 +2306,7 @@ function VantageRuntime.MonsterSafe.IsPlayerCharacter(model)
     return false
 end
 
-function VantageRuntime.MonsterSafe.HasMonsterName(instance)
+function VantageMonsterSafe.HasMonsterName(instance)
     if not instance then return false end
 
     local name = string.lower(tostring(instance.Name or ""))
@@ -2307,7 +2325,7 @@ function VantageRuntime.MonsterSafe.HasMonsterName(instance)
     return false
 end
 
-function VantageRuntime.MonsterSafe.IsAnimatedNPC(model)
+function VantageMonsterSafe.IsAnimatedNPC(model)
     if not model or not model:IsA("Model") then
         return false
     end
@@ -2336,7 +2354,7 @@ function VantageRuntime.MonsterSafe.IsAnimatedNPC(model)
     return false
 end
 
-function VantageRuntime.MonsterSafe.GetTopMonsterModel(model)
+function VantageMonsterSafe.GetTopMonsterModel(model)
     if not model or not model:IsA("Model") then
         return nil
     end
@@ -2347,7 +2365,7 @@ function VantageRuntime.MonsterSafe.GetTopMonsterModel(model)
     while current.Parent
         and current.Parent:IsA("Model")
         and depth < 4
-        and not VantageRuntime.MonsterSafe.IsPlayerCharacter(current.Parent) do
+        and not VantageMonsterSafe.IsPlayerCharacter(current.Parent) do
 
         local parentModel = current.Parent
 
@@ -2377,47 +2395,47 @@ function VantageRuntime.MonsterSafe.GetTopMonsterModel(model)
     return current
 end
 
-function VantageRuntime.MonsterSafe.IsMonsterCandidate(model)
+function VantageMonsterSafe.IsMonsterCandidate(model)
     if not model
         or not model:IsA("Model")
         or not model.Parent
-        or VantageRuntime.MonsterSafe.IsPlayerCharacter(model) then
+        or VantageMonsterSafe.IsPlayerCharacter(model) then
         return false
     end
 
-    if VantageRuntime.MonsterSafe.HasMonsterName(model) then
+    if VantageMonsterSafe.HasMonsterName(model) then
         return true
     end
 
-    if VantageRuntime.MonsterSafe.IsAnimatedNPC(model) then
+    if VantageMonsterSafe.IsAnimatedNPC(model) then
         return true
     end
 
     return false
 end
 
-function VantageRuntime.MonsterSafe.DisableModel(model)
-    if not VantageRuntime.MonsterSafe.Enabled
+function VantageMonsterSafe.DisableModel(model)
+    if not VantageMonsterSafe.Enabled
         or not model
         or not model:IsA("Model")
-        or VantageRuntime.MonsterSafe.IsPlayerCharacter(model) then
+        or VantageMonsterSafe.IsPlayerCharacter(model) then
         return
     end
 
-    local topModel = VantageRuntime.MonsterSafe.GetTopMonsterModel(model) or model
+    local topModel = VantageMonsterSafe.GetTopMonsterModel(model) or model
 
-    if VantageRuntime.MonsterSafe.IsPlayerCharacter(topModel) then
+    if VantageMonsterSafe.IsPlayerCharacter(topModel) then
         return
     end
 
-    if VantageRuntime.MonsterSafe.DisabledModels[topModel] then
+    if VantageMonsterSafe.DisabledModels[topModel] then
         return
     end
 
     local parent = topModel.Parent
     if not parent then return end
 
-    VantageRuntime.MonsterSafe.DisabledModels[topModel] = parent
+    VantageMonsterSafe.DisabledModels[topModel] = parent
 
     -- Removing the replicated model locally is much stronger than transparency:
     -- visual body, local hitboxes, TouchInterests and client-side AI all disappear.
@@ -2426,8 +2444,8 @@ function VantageRuntime.MonsterSafe.DisableModel(model)
     end)
 end
 
-function VantageRuntime.MonsterSafe.Apply()
-    if not VantageRuntime.MonsterSafe.Enabled then
+function VantageMonsterSafe.Apply()
+    if not VantageMonsterSafe.Enabled then
         return
     end
 
@@ -2438,7 +2456,7 @@ function VantageRuntime.MonsterSafe.Apply()
         if d:IsA("Humanoid") then
             local model = d.Parent
             if model and model:IsA("Model")
-                and not VantageRuntime.MonsterSafe.IsPlayerCharacter(model) then
+                and not VantageMonsterSafe.IsPlayerCharacter(model) then
                 candidates[model] = true
             end
 
@@ -2449,7 +2467,7 @@ function VantageRuntime.MonsterSafe.Apply()
             end
 
             if model and model:IsA("Model")
-                and not VantageRuntime.MonsterSafe.IsPlayerCharacter(model) then
+                and not VantageMonsterSafe.IsPlayerCharacter(model) then
                 candidates[model] = true
             end
         end
@@ -2458,15 +2476,15 @@ function VantageRuntime.MonsterSafe.Apply()
     -- Name-based fallback for custom monsters/bosses.
     for _, child in ipairs(workspace:GetChildren()) do
         if child:IsA("Model")
-            and not VantageRuntime.MonsterSafe.IsPlayerCharacter(child)
-            and VantageRuntime.MonsterSafe.HasMonsterName(child) then
+            and not VantageMonsterSafe.IsPlayerCharacter(child)
+            and VantageMonsterSafe.HasMonsterName(child) then
             candidates[child] = true
         end
 
-        if child:IsA("Folder") and VantageRuntime.MonsterSafe.HasMonsterName(child) then
+        if child:IsA("Folder") and VantageMonsterSafe.HasMonsterName(child) then
             for _, nested in ipairs(child:GetChildren()) do
                 if nested:IsA("Model")
-                    and not VantageRuntime.MonsterSafe.IsPlayerCharacter(nested) then
+                    and not VantageMonsterSafe.IsPlayerCharacter(nested) then
                     candidates[nested] = true
                 end
             end
@@ -2474,32 +2492,32 @@ function VantageRuntime.MonsterSafe.Apply()
     end
 
     -- Reuse VANTAGE radar detections too.
-    if VantageRuntime.BotRadar and VantageRuntime.BotRadar.Objects then
-        for model in pairs(VantageRuntime.BotRadar.Objects) do
-            if model and model.Parent and not VantageRuntime.MonsterSafe.IsPlayerCharacter(model) then
+    if VantageBotRadar and VantageBotRadar.Objects then
+        for model in pairs(VantageBotRadar.Objects) do
+            if model and model.Parent and not VantageMonsterSafe.IsPlayerCharacter(model) then
                 candidates[model] = true
             end
         end
     end
 
     for model in pairs(candidates) do
-        if VantageRuntime.MonsterSafe.IsMonsterCandidate(model)
-            or (VantageRuntime.BotRadar and VantageRuntime.BotRadar.Objects and VantageRuntime.BotRadar.Objects[model]) then
-            VantageRuntime.MonsterSafe.DisableModel(model)
+        if VantageMonsterSafe.IsMonsterCandidate(model)
+            or (VantageBotRadar and VantageBotRadar.Objects and VantageBotRadar.Objects[model]) then
+            VantageMonsterSafe.DisableModel(model)
         end
     end
 
-    VantageRuntime.MonsterSafe.ApplyManualTargets()
+    VantageMonsterSafe.ApplyManualTargets()
 end
 
-function VantageRuntime.MonsterSafe.Restore()
+function VantageMonsterSafe.Restore()
     local restoreList = {}
 
-    for model, parent in pairs(VantageRuntime.MonsterSafe.DisabledModels) do
+    for model, parent in pairs(VantageMonsterSafe.DisabledModels) do
         table.insert(restoreList, {Model = model, Parent = parent})
     end
 
-    VantageRuntime.MonsterSafe.DisabledModels = {}
+    VantageMonsterSafe.DisabledModels = {}
 
     for _, item in ipairs(restoreList) do
         local model = item.Model
@@ -2512,11 +2530,11 @@ function VantageRuntime.MonsterSafe.Restore()
         end
     end
 
-    VantageRuntime.MonsterSafe.RestoreManualTargets()
+    VantageMonsterSafe.RestoreManualTargets()
 end
 
 
-function VantageRuntime.MonsterSafe.GetManualTargetFromMouse()
+function VantageMonsterSafe.GetManualTargetFromMouse()
     local mouse = LocalPlayer:GetMouse()
     local hit = mouse and mouse.Target
     if not hit or not hit.Parent then
@@ -2555,7 +2573,7 @@ function VantageRuntime.MonsterSafe.GetManualTargetFromMouse()
     return target
 end
 
-function VantageRuntime.MonsterSafe.AddManualTarget(target)
+function VantageMonsterSafe.AddManualTarget(target)
     if not target or not target.Parent then
         return false
     end
@@ -2571,16 +2589,16 @@ function VantageRuntime.MonsterSafe.AddManualTarget(target)
         end
     end
 
-    if VantageRuntime.MonsterSafe.ManualTargets[target] then
+    if VantageMonsterSafe.ManualTargets[target] then
         return true
     end
 
-    VantageRuntime.MonsterSafe.ManualTargets[target] = {
+    VantageMonsterSafe.ManualTargets[target] = {
         Parent = target.Parent,
         Name = target.Name,
     }
 
-    if VantageRuntime.MonsterSafe.Enabled then
+    if VantageMonsterSafe.Enabled then
         pcall(function()
             target.Parent = nil
         end)
@@ -2589,12 +2607,12 @@ function VantageRuntime.MonsterSafe.AddManualTarget(target)
     return true
 end
 
-function VantageRuntime.MonsterSafe.ApplyManualTargets()
-    if not VantageRuntime.MonsterSafe.Enabled then
+function VantageMonsterSafe.ApplyManualTargets()
+    if not VantageMonsterSafe.Enabled then
         return
     end
 
-    for target, data in pairs(VantageRuntime.MonsterSafe.ManualTargets) do
+    for target, data in pairs(VantageMonsterSafe.ManualTargets) do
         if target then
             pcall(function()
                 target.Parent = nil
@@ -2603,8 +2621,8 @@ function VantageRuntime.MonsterSafe.ApplyManualTargets()
     end
 end
 
-function VantageRuntime.MonsterSafe.RestoreManualTargets()
-    for target, data in pairs(VantageRuntime.MonsterSafe.ManualTargets) do
+function VantageMonsterSafe.RestoreManualTargets()
+    for target, data in pairs(VantageMonsterSafe.ManualTargets) do
         if target and data and data.Parent and data.Parent.Parent then
             pcall(function()
                 target.Parent = data.Parent
@@ -2613,25 +2631,25 @@ function VantageRuntime.MonsterSafe.RestoreManualTargets()
     end
 end
 
-function VantageRuntime.MonsterSafe.SetEnabled(enabled)
-    VantageRuntime.MonsterSafe.Enabled = enabled and true or false
-    VantageRuntime.MonsterSafe.Elapsed = 0
+function VantageMonsterSafe.SetEnabled(enabled)
+    VantageMonsterSafe.Enabled = enabled and true or false
+    VantageMonsterSafe.Elapsed = 0
 
-    if VantageRuntime.MonsterSafe.Enabled then
-        VantageRuntime.MonsterSafe.Apply()
+    if VantageMonsterSafe.Enabled then
+        VantageMonsterSafe.Apply()
     else
-        VantageRuntime.MonsterSafe.Restore()
+        VantageMonsterSafe.Restore()
     end
 end
 
-if not VantageRuntime.MonsterSafe.Connection then
-    VantageRuntime.MonsterSafe.Connection = RunService.Heartbeat:Connect(function(dt)
-        if not VantageRuntime.MonsterSafe.Enabled then return end
+if not VantageMonsterSafe.Connection then
+    VantageMonsterSafe.Connection = RunService.Heartbeat:Connect(function(dt)
+        if not VantageMonsterSafe.Enabled then return end
 
-        VantageRuntime.MonsterSafe.Elapsed += dt
-        if VantageRuntime.MonsterSafe.Elapsed >= 0.10 then
-            VantageRuntime.MonsterSafe.Elapsed = 0
-            VantageRuntime.MonsterSafe.Apply()
+        VantageMonsterSafe.Elapsed += dt
+        if VantageMonsterSafe.Elapsed >= 0.10 then
+            VantageMonsterSafe.Elapsed = 0
+            VantageMonsterSafe.Apply()
         end
     end)
 end
@@ -2641,16 +2659,18 @@ end
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "VantageRecorderUI"
-ScreenGui:SetAttribute("VANTAGE_Owned", true)
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Enabled = true
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Compatibility sweep: only exact GUI names owned by this script.
--- This intentionally does NOT inspect or delete unrelated ScreenGuis.
+-- Keep exactly this ScreenGui alive. Older async runs sometimes recreate a
+-- second menu after the initial cleanup, so sweep duplicates for a few seconds.
 pcall(function()
+    local env = (getgenv and getgenv()) or _G
+    env.__VANTAGE_CURRENT_GUI = ScreenGui
+
     task.spawn(function()
         for _ = 1, 20 do
             task.wait(0.25)
@@ -2661,13 +2681,12 @@ pcall(function()
 
             for _, child in ipairs(playerGui:GetChildren()) do
                 if child:IsA("ScreenGui") and child ~= ScreenGui then
-                    if child.Name == "VantageRecorderUI"
-                        or child.Name == "VantageLicenseGate"
-                        or child.Name == "VantageAimOverlay"
+                    local n = string.lower(child.Name)
+                    if n == "vantagerecorderui"
+                        or n == "recorderui"
+                        or string.find(n, "vantage", 1, true)
                     then
-                        pcall(function()
-                            child:Destroy()
-                        end)
+                        pcall(function() child:Destroy() end)
                     end
                 end
             end
@@ -2682,7 +2701,7 @@ local TweenService = game:GetService("TweenService")
 -- Activity only. No IP/device/private-file collection.
 -- ============================================
 
-VantageRuntime.Logger = VantageRuntime.Logger or {
+VantageLogger = VantageLogger or {
     Enabled = true,
     SessionId = HttpService:GenerateGUID(false):sub(1, 8),
     StartedAt = os.time(),
@@ -2693,10 +2712,10 @@ VantageRuntime.Logger = VantageRuntime.Logger or {
 }
 
 -- Webhook is server-side only. The client sends activity to the VANTAGE backend.
-function VantageRuntime.Logger.Request(payload)
+function VantageLogger.Request(payload)
     -- Logging must NEVER block or break the VANTAGE UI.
-    if not VantageRuntime.Logger.Enabled then return false end
-    if type(VantageRuntime.License) ~= "table" or type(VantageRuntime.License.ApiBase) ~= "string" or VantageRuntime.License.ApiBase == "" then
+    if not VantageLogger.Enabled then return false end
+    if type(VantageLicense) ~= "table" or type(VantageLicense.ApiBase) ~= "string" or VantageLicense.ApiBase == "" then
         return false
     end
 
@@ -2704,13 +2723,13 @@ function VantageRuntime.Logger.Request(payload)
     if not requestFn then return false end
 
     local headers = {["Content-Type"] = "application/json"}
-    if VantageRuntime.License.SessionToken then
-        headers["Authorization"] = "Bearer " .. tostring(VantageRuntime.License.SessionToken)
+    if VantageLicense.SessionToken then
+        headers["Authorization"] = "Bearer " .. tostring(VantageLicense.SessionToken)
     end
 
     local ok, response = pcall(function()
         return requestFn({
-            Url = VantageRuntime.License.ApiBase .. "/v1/activity/log",
+            Url = VantageLicense.ApiBase .. "/v1/activity/log",
             Method = "POST",
             Headers = headers,
             Body = HttpService:JSONEncode(payload)
@@ -2722,7 +2741,7 @@ function VantageRuntime.Logger.Request(payload)
     return status >= 200 and status < 300
 end
 
-function VantageRuntime.Logger.GetGameName()
+function VantageLogger.GetGameName()
     local ok, info = pcall(function()
         return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
     end)
@@ -2739,64 +2758,64 @@ function VantageRuntime.Logger.GetGameName()
     return "لعبة غير معروفة"
 end
 
-function VantageRuntime.Logger.GetPlayerCount()
+function VantageLogger.GetPlayerCount()
     return tostring(#Players:GetPlayers()) .. " / " .. tostring(Players.MaxPlayers)
 end
 
-function VantageRuntime.Logger.BaseFields()
+function VantageLogger.BaseFields()
     return {
         {name = "اللاعب", value = LocalPlayer.DisplayName .. "  (@" .. LocalPlayer.Name .. ")", inline = true},
         {name = "معرف المستخدم", value = tostring(LocalPlayer.UserId), inline = true},
-        {name = "الجلسة", value = tostring(VantageRuntime.Logger.SessionId), inline = true},
-        {name = "اللعبة / السيرفر", value = VantageRuntime.Logger.GetGameName(), inline = true},
-        {name = "عدد اللاعبين", value = VantageRuntime.Logger.GetPlayerCount(), inline = true},
+        {name = "الجلسة", value = tostring(VantageLogger.SessionId), inline = true},
+        {name = "اللعبة / السيرفر", value = VantageLogger.GetGameName(), inline = true},
+        {name = "عدد اللاعبين", value = VantageLogger.GetPlayerCount(), inline = true},
         {name = "معرف المكان", value = tostring(game.PlaceId), inline = true},
         {name = "معرف السيرفر", value = (game.JobId ~= "" and game.JobId or "غير معروف"), inline = false},
     }
 end
 
-function VantageRuntime.Logger.Send(title, description, category)
-    if not VantageRuntime.Logger.Enabled then
+function VantageLogger.Send(title, description, category)
+    if not VantageLogger.Enabled then
         return
     end
 
     category = tostring(category or "GENERAL")
-    VantageRuntime.Logger.Counts[category] = (VantageRuntime.Logger.Counts[category] or 0) + 1
+    VantageLogger.Counts[category] = (VantageLogger.Counts[category] or 0) + 1
 
-    if #VantageRuntime.Logger.Queue >= 100 then
-        table.remove(VantageRuntime.Logger.Queue, 1)
+    if #VantageLogger.Queue >= 100 then
+        table.remove(VantageLogger.Queue, 1)
     end
 
-    table.insert(VantageRuntime.Logger.Queue, {
+    table.insert(VantageLogger.Queue, {
         username = "سجل VANTAGE",
         embeds = {{
             title = "VANTAGE • " .. tostring(title or "سجل"),
             description = tostring(description or "لا توجد تفاصيل"),
             color = 9515775,
-            fields = VantageRuntime.Logger.BaseFields(),
+            fields = VantageLogger.BaseFields(),
             footer = {
                 text = "سجل نشاط VANTAGE • " .. os.date("%Y-%m-%d %H:%M:%S")
             }
         }}
     })
 
-    if VantageRuntime.Logger.Sending then
+    if VantageLogger.Sending then
         return
     end
 
-    VantageRuntime.Logger.Sending = true
+    VantageLogger.Sending = true
     task.spawn(function()
-        while #VantageRuntime.Logger.Queue > 0 do
-            local delay = 0.75 - (os.clock() - (VantageRuntime.Logger.LastSent or 0))
+        while #VantageLogger.Queue > 0 do
+            local delay = 0.75 - (os.clock() - (VantageLogger.LastSent or 0))
             if delay > 0 then
                 task.wait(delay)
             end
 
-            local payload = table.remove(VantageRuntime.Logger.Queue, 1)
+            local payload = table.remove(VantageLogger.Queue, 1)
             local delivered = false
 
             for attempt = 1, 3 do
-                if VantageRuntime.Logger.Request(payload) then
+                if VantageLogger.Request(payload) then
                     delivered = true
                     break
                 end
@@ -2807,14 +2826,14 @@ function VantageRuntime.Logger.Send(title, description, category)
                 warn("VANTAGE LOGGER: تعذر إرسال السجل بعد 3 محاولات")
             end
 
-            VantageRuntime.Logger.LastSent = os.clock()
+            VantageLogger.LastSent = os.clock()
         end
 
-        VantageRuntime.Logger.Sending = false
+        VantageLogger.Sending = false
     end)
 end
 
-function VantageRuntime.Logger.SessionSummary(reason)
+function VantageLogger.SessionSummary(reason)
     local parts = {}
     local categoryNames = {
         GENERAL = "عام",
@@ -2829,15 +2848,15 @@ function VantageRuntime.Logger.SessionSummary(reason)
         ESP = "ESP",
     }
 
-    for category, count in pairs(VantageRuntime.Logger.Counts) do
+    for category, count in pairs(VantageLogger.Counts) do
         table.insert(parts, tostring(categoryNames[category] or category) .. ": " .. tostring(count))
     end
 
     table.sort(parts)
 
-    VantageRuntime.Logger.Send(
+    VantageLogger.Send(
         "انتهت الجلسة",
-        "السبب: **" .. tostring(reason or "غير معروف") .. "**\nالمدة: **" .. tostring(math.max(0, os.time() - VantageRuntime.Logger.StartedAt)) .. " ثانية**\nالأحداث: **" .. (#parts > 0 and table.concat(parts, " • ") or "لا توجد") .. "**",
+        "السبب: **" .. tostring(reason or "غير معروف") .. "**\nالمدة: **" .. tostring(math.max(0, os.time() - VantageLogger.StartedAt)) .. " ثانية**\nالأحداث: **" .. (#parts > 0 and table.concat(parts, " • ") or "لا توجد") .. "**",
         "SESSION"
     )
 end
@@ -2847,7 +2866,7 @@ end
 -- VANTAGE LICENSE GATE
 -- Set this to your deployed API URL, e.g. https://your-domain.example
 -- ============================================
-VantageRuntime.License = VantageRuntime.License or {
+VantageLicense = VantageLicense or {
     ApiBase = "https://workflow-attachments-promises-worcester.trycloudflare.com",
     SessionToken = nil,
     Key = nil,
@@ -2860,20 +2879,20 @@ VantageRuntime.License = VantageRuntime.License or {
     LicenseFile = "VantageLicense/license.json",
 }
 
-function VantageRuntime.License.Request(method, path, body)
+function VantageLicense.Request(method, path, body)
     local requestFn = request or http_request or (syn and syn.request)
     if not requestFn then
         return false, "This executor does not expose an HTTP request function."
     end
 
     local headers = {["Content-Type"] = "application/json"}
-    if VantageRuntime.License.SessionToken then
-        headers["Authorization"] = "Bearer " .. tostring(VantageRuntime.License.SessionToken)
+    if VantageLicense.SessionToken then
+        headers["Authorization"] = "Bearer " .. tostring(VantageLicense.SessionToken)
     end
 
     local ok, response = pcall(function()
         return requestFn({
-            Url = VantageRuntime.License.ApiBase .. path,
+            Url = VantageLicense.ApiBase .. path,
             Method = method,
             Headers = headers,
             Body = body and HttpService:JSONEncode(body) or nil
@@ -2897,13 +2916,13 @@ function VantageRuntime.License.Request(method, path, body)
     return false, (type(decoded) == "table" and decoded.error) or ("HTTP " .. tostring(status)), status
 end
 
-function VantageRuntime.License.RequestTimed(method, path, body, timeoutSeconds)
+function VantageLicense.RequestTimed(method, path, body, timeoutSeconds)
     timeoutSeconds = tonumber(timeoutSeconds) or 4
     local finished = false
     local okResult, dataResult, statusResult = false, "API request timed out.", 0
 
     task.spawn(function()
-        local ok, data, status = VantageRuntime.License.Request(method, path, body)
+        local ok, data, status = VantageLicense.Request(method, path, body)
         if not finished then
             okResult, dataResult, statusResult = ok, data, status or 0
             finished = true
@@ -2923,7 +2942,7 @@ function VantageRuntime.License.RequestTimed(method, path, body, timeoutSeconds)
     return okResult, dataResult, statusResult
 end
 
-function VantageRuntime.License.SaveKey(keyText)
+function VantageLicense.SaveKey(keyText)
     if type(writefile) ~= "function" then
         return false
     end
@@ -2941,17 +2960,17 @@ function VantageRuntime.License.SaveKey(keyText)
     -- Keep the old location as a best-effort compatibility copy.
     if type(makefolder) == "function" then
         pcall(function()
-            if type(isfolder) ~= "function" or not isfolder(VantageRuntime.License.LicenseFolder) then
-                makefolder(VantageRuntime.License.LicenseFolder)
+            if type(isfolder) ~= "function" or not isfolder(VantageLicense.LicenseFolder) then
+                makefolder(VantageLicense.LicenseFolder)
             end
-            writefile(VantageRuntime.License.LicenseFile, payload)
+            writefile(VantageLicense.LicenseFile, payload)
         end)
     end
 
     return ok
 end
 
-function VantageRuntime.License.LoadKey()
+function VantageLicense.LoadKey()
     if type(readfile) ~= "function" then return nil end
 
     local function readKey(path)
@@ -2977,17 +2996,17 @@ function VantageRuntime.License.LoadKey()
     if key then return key end
 
     -- Migrate existing users automatically from the previous save path.
-    key = readKey(VantageRuntime.License.LicenseFile)
+    key = readKey(VantageLicense.LicenseFile)
     if key then
-        VantageRuntime.License.SaveKey(key)
+        VantageLicense.SaveKey(key)
         return key
     end
 
     return nil
 end
 
-function VantageRuntime.License.ClearSavedKey()
-    for _, path in ipairs({"VANTAGE_LICENSE.json", VantageRuntime.License.LicenseFile}) do
+function VantageLicense.ClearSavedKey()
+    for _, path in ipairs({"VANTAGE_LICENSE.json", VantageLicense.LicenseFile}) do
         if type(delfile) == "function" then
             pcall(delfile, path)
         elseif type(writefile) == "function" then
@@ -2998,46 +3017,46 @@ function VantageRuntime.License.ClearSavedKey()
     end
 end
 
-function VantageRuntime.License.Validate(keyText)
+function VantageLicense.Validate(keyText)
     keyText = tostring(keyText or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if keyText == "" then
         return false, "Enter your VANTAGE key."
     end
 
-    local ok, result, status = VantageRuntime.License.RequestTimed("POST", "/v1/license/activate", {
+    local ok, result, status = VantageLicense.RequestTimed("POST", "/v1/license/activate", {
         key = keyText,
         user_id = tostring(LocalPlayer.UserId),
         username = tostring(LocalPlayer.Name),
         display_name = tostring(LocalPlayer.DisplayName),
         place_id = tostring(game.PlaceId),
         job_id = tostring(game.JobId),
-        game_name = VantageRuntime.Logger.GetGameName(),
+        game_name = VantageLogger.GetGameName(),
     }, 5)
 
     if not ok then
         return false, tostring(result), status
     end
 
-    VantageRuntime.License.Key = keyText
-    VantageRuntime.License.SessionToken = result.session_token
-    VantageRuntime.License.Plan = result.plan
-    VantageRuntime.License.ExpiresAt = tonumber(result.expires_at)
-    local saved = VantageRuntime.License.SaveKey(keyText)
+    VantageLicense.Key = keyText
+    VantageLicense.SessionToken = result.session_token
+    VantageLicense.Plan = result.plan
+    VantageLicense.ExpiresAt = tonumber(result.expires_at)
+    local saved = VantageLicense.SaveKey(keyText)
     if not saved then
         warn("VANTAGE: key is valid, but this executor did not allow persistent key saving.")
     end
     return true, result
 end
 
-function VantageRuntime.License.FormatRemaining()
-    if not VantageRuntime.License.Key then
+function VantageLicense.FormatRemaining()
+    if not VantageLicense.Key then
         return "NO KEY MODE"
     end
-    if VantageRuntime.License.ExpiresAt == nil then
+    if VantageLicense.ExpiresAt == nil then
         return "LIFETIME"
     end
 
-    local left = math.max(0, math.floor(VantageRuntime.License.ExpiresAt - os.time()))
+    local left = math.max(0, math.floor(VantageLicense.ExpiresAt - os.time()))
     local days = math.floor(left / 86400)
     local hours = math.floor((left % 86400) / 3600)
     local mins = math.floor((left % 3600) / 60)
@@ -3048,23 +3067,23 @@ function VantageRuntime.License.FormatRemaining()
     return string.format("%02d:%02d:%02d", hours, mins, secs)
 end
 
-function VantageRuntime.License.UpdateExpiryLabel()
-    if VantageRuntime.License.ExpiryLabel and VantageRuntime.License.ExpiryLabel.Parent then
-        VantageRuntime.License.ExpiryLabel.Text = VantageRuntime.License.FormatRemaining()
+function VantageLicense.UpdateExpiryLabel()
+    if VantageLicense.ExpiryLabel and VantageLicense.ExpiryLabel.Parent then
+        VantageLicense.ExpiryLabel.Text = VantageLicense.FormatRemaining()
     end
 end
 
-function VantageRuntime.License.HandleLicenseEnded(reason)
-    if VantageRuntime.License.LicenseEndedHandling then return end
-    VantageRuntime.License.LicenseEndedHandling = true
+function VantageLicense.HandleLicenseEnded(reason)
+    if VantageLicense.LicenseEndedHandling then return end
+    VantageLicense.LicenseEndedHandling = true
 
-    VantageRuntime.License.HeartbeatRunning = false
-    VantageRuntime.License.SessionToken = nil
-    VantageRuntime.License.Key = nil
-    VantageRuntime.License.Plan = nil
-    VantageRuntime.License.ExpiresAt = nil
-    VantageRuntime.License.ClearSavedKey()
-    VantageRuntime.License.UpdateExpiryLabel()
+    VantageLicense.HeartbeatRunning = false
+    VantageLicense.SessionToken = nil
+    VantageLicense.Key = nil
+    VantageLicense.Plan = nil
+    VantageLicense.ExpiresAt = nil
+    VantageLicense.ClearSavedKey()
+    VantageLicense.UpdateExpiryLabel()
 
     -- Revoke access immediately. The license gate is a separate ScreenGui, so it remains visible.
     if ScreenGui and ScreenGui.Parent then
@@ -3072,39 +3091,39 @@ function VantageRuntime.License.HandleLicenseEnded(reason)
     end
 
     task.spawn(function()
-        if not VantageRuntime.License.GateOpen then
-            VantageRuntime.License.ShowGate(reason or "Your VANTAGE key is no longer active.")
+        if not VantageLicense.GateOpen then
+            VantageLicense.ShowGate(reason or "Your VANTAGE key is no longer active.")
         end
-        VantageRuntime.License.LicenseEndedHandling = false
+        VantageLicense.LicenseEndedHandling = false
     end)
 end
 
-function VantageRuntime.License.StartHeartbeat()
-    if VantageRuntime.License.HeartbeatRunning or not VantageRuntime.License.SessionToken then
+function VantageLicense.StartHeartbeat()
+    if VantageLicense.HeartbeatRunning or not VantageLicense.SessionToken then
         return
     end
 
-    VantageRuntime.License.HeartbeatRunning = true
+    VantageLicense.HeartbeatRunning = true
     task.spawn(function()
-        while VantageRuntime.License.HeartbeatRunning and VantageRuntime.License.SessionToken do
-            local ok, result, status = VantageRuntime.License.RequestTimed("POST", "/v1/session/heartbeat", {
+        while VantageLicense.HeartbeatRunning and VantageLicense.SessionToken do
+            local ok, result, status = VantageLicense.RequestTimed("POST", "/v1/session/heartbeat", {
                 place_id = tostring(game.PlaceId),
                 job_id = tostring(game.JobId),
-                game_name = VantageRuntime.Logger.GetGameName(),
+                game_name = VantageLogger.GetGameName(),
                 player_count = #Players:GetPlayers(),
                 max_players = Players.MaxPlayers,
             }, 4)
 
             if ok and type(result) == "table" then
                 if result.expires_at ~= nil then
-                    VantageRuntime.License.ExpiresAt = tonumber(result.expires_at)
+                    VantageLicense.ExpiresAt = tonumber(result.expires_at)
                 end
                 if result.plan ~= nil then
-                    VantageRuntime.License.Plan = tostring(result.plan)
+                    VantageLicense.Plan = tostring(result.plan)
                 end
-                VantageRuntime.License.UpdateExpiryLabel()
+                VantageLicense.UpdateExpiryLabel()
             elseif status == 401 or status == 403 or status == 404 then
-                VantageRuntime.License.HandleLicenseEnded(tostring(result or "Your VANTAGE key is no longer active."))
+                VantageLicense.HandleLicenseEnded(tostring(result or "Your VANTAGE key is no longer active."))
                 break
             end
 
@@ -3114,8 +3133,8 @@ function VantageRuntime.License.StartHeartbeat()
     end)
 end
 
-function VantageRuntime.License.IsKeyRequired()
-    local ok, result = VantageRuntime.License.RequestTimed("GET", "/v1/license/mode", nil, 3)
+function VantageLicense.IsKeyRequired()
+    local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
     if ok and type(result) == "table" and result.require_key ~= nil then
         return result.require_key == true
     end
@@ -3124,26 +3143,26 @@ function VantageRuntime.License.IsKeyRequired()
     return true
 end
 
-function VantageRuntime.License.SetNoKeyAccess()
+function VantageLicense.SetNoKeyAccess()
     -- NO-KEY must immediately release a waiting license gate.
-    VantageRuntime.License.HeartbeatRunning = false
-    VantageRuntime.License.SessionToken = nil
-    VantageRuntime.License.Key = nil
-    VantageRuntime.License.Plan = "NO KEY MODE"
-    VantageRuntime.License.ExpiresAt = nil
-    VantageRuntime.License.UpdateExpiryLabel()
+    VantageLicense.HeartbeatRunning = false
+    VantageLicense.SessionToken = nil
+    VantageLicense.Key = nil
+    VantageLicense.Plan = "NO KEY MODE"
+    VantageLicense.ExpiresAt = nil
+    VantageLicense.UpdateExpiryLabel()
 
-    if VantageRuntime.License.GateGui and VantageRuntime.License.GateGui.Parent then
-        VantageRuntime.License.GateGui:Destroy()
+    if VantageLicense.GateGui and VantageLicense.GateGui.Parent then
+        VantageLicense.GateGui:Destroy()
     end
-    VantageRuntime.License.GateGui = nil
-    VantageRuntime.License.GateOpen = false
+    VantageLicense.GateGui = nil
+    VantageLicense.GateOpen = false
 
-    if VantageRuntime.License.GateDone then
+    if VantageLicense.GateDone then
         pcall(function()
-            VantageRuntime.License.GateDone:Fire(true)
+            VantageLicense.GateDone:Fire(true)
         end)
-        VantageRuntime.License.GateDone = nil
+        VantageLicense.GateDone = nil
     end
 
     if ScreenGui and ScreenGui.Parent then
@@ -3151,15 +3170,15 @@ function VantageRuntime.License.SetNoKeyAccess()
     end
 end
 
-function VantageRuntime.License.StartModeWatch()
-    if VantageRuntime.License.ModeWatchRunning then return end
-    VantageRuntime.License.ModeWatchRunning = true
+function VantageLicense.StartModeWatch()
+    if VantageLicense.ModeWatchRunning then return end
+    VantageLicense.ModeWatchRunning = true
 
     task.spawn(function()
         local lastMode = nil
 
-        while VantageRuntime.License.ModeWatchRunning do
-            local ok, result = VantageRuntime.License.RequestTimed("GET", "/v1/license/mode", nil, 3)
+        while VantageLicense.ModeWatchRunning do
+            local ok, result = VantageLicense.RequestTimed("GET", "/v1/license/mode", nil, 3)
 
             if ok and type(result) == "table" and result.require_key ~= nil then
                 local requireKey = result.require_key == true
@@ -3168,19 +3187,19 @@ function VantageRuntime.License.StartModeWatch()
                     lastMode = requireKey
 
                     if requireKey then
-                        if not VantageRuntime.License.SessionToken then
+                        if not VantageLicense.SessionToken then
                             if ScreenGui and ScreenGui.Parent then
                                 ScreenGui.Enabled = false
                             end
 
-                            if not VantageRuntime.License.GateOpen then
+                            if not VantageLicense.GateOpen then
                                 task.spawn(function()
-                                    VantageRuntime.License.ShowGate("تم تفعيل وضع الكي. أدخل كي VANTAGE فعال.")
+                                    VantageLicense.ShowGate("تم تفعيل وضع الكي. أدخل كي VANTAGE فعال.")
                                 end)
                             end
                         end
                     else
-                        VantageRuntime.License.SetNoKeyAccess()
+                        VantageLicense.SetNoKeyAccess()
                     end
                 end
             end
@@ -3190,15 +3209,14 @@ function VantageRuntime.License.StartModeWatch()
     end)
 end
 
-function VantageRuntime.License.ShowGate(initialMessage)
-    if VantageRuntime.License.GateOpen then return end
-    VantageRuntime.License.GateOpen = true
+function VantageLicense.ShowGate(initialMessage)
+    if VantageLicense.GateOpen then return end
+    VantageLicense.GateOpen = true
     local DISCORD_INVITE = "https://discord.gg/szsxhYKrxG"
 
     local gateGui = Instance.new("ScreenGui")
-    VantageRuntime.License.GateGui = gateGui
+    VantageLicense.GateGui = gateGui
     gateGui.Name = "VantageLicenseGate"
-    gateGui:SetAttribute("VANTAGE_Owned", true)
     gateGui.ResetOnSpawn = false
     gateGui.IgnoreGuiInset = false
     gateGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
@@ -3258,7 +3276,7 @@ function VantageRuntime.License.ShowGate(initialMessage)
     box.BorderSizePixel = 0
     box.ClearTextOnFocus = false
     box.PlaceholderText = "VANTAGE-XXXX-XXXX-XXXX"
-    box.Text = VantageRuntime.License.LoadKey() or ""
+    box.Text = VantageLicense.LoadKey() or ""
     box.Font = Enum.Font.Code
     box.TextSize = 14
     box.TextColor3 = Color3.fromRGB(245, 242, 255)
@@ -3302,7 +3320,7 @@ function VantageRuntime.License.ShowGate(initialMessage)
     Instance.new("UICorner", discord).CornerRadius = UDim.new(0, 9)
 
     local done = Instance.new("BindableEvent")
-    VantageRuntime.License.GateDone = done
+    VantageLicense.GateDone = done
     local busy = false
 
     local function submit()
@@ -3312,19 +3330,19 @@ function VantageRuntime.License.ShowGate(initialMessage)
         status.Text = "Validating license..."
         status.TextColor3 = Color3.fromRGB(190, 174, 215)
 
-        local ok, result = VantageRuntime.License.Validate(box.Text)
+        local ok, result = VantageLicense.Validate(box.Text)
         if ok then
             status.Text = "LICENSE ACTIVE • " .. tostring(result.plan or "ACTIVE")
             status.TextColor3 = Color3.fromRGB(92, 230, 145)
             activate.Text = "ACCESS GRANTED"
-            VantageRuntime.License.StartHeartbeat()
+            VantageLicense.StartHeartbeat()
             task.wait(0.35)
-            VantageRuntime.License.GateOpen = false
+            VantageLicense.GateOpen = false
             if gateGui and gateGui.Parent then
                 gateGui:Destroy()
             end
-            VantageRuntime.License.GateGui = nil
-            VantageRuntime.License.GateDone = nil
+            VantageLicense.GateGui = nil
+            VantageLicense.GateDone = nil
             if ScreenGui and ScreenGui.Parent then
                 ScreenGui.Enabled = true
             end
@@ -3363,12 +3381,12 @@ function VantageRuntime.License.ShowGate(initialMessage)
 
     close.MouseButton1Click:Connect(function()
         -- Closing the gate never grants access, but reset the UI state cleanly.
-        VantageRuntime.License.GateOpen = false
+        VantageLicense.GateOpen = false
         if gateGui and gateGui.Parent then
             gateGui:Destroy()
         end
-        VantageRuntime.License.GateGui = nil
-        VantageRuntime.License.GateDone = nil
+        VantageLicense.GateGui = nil
+        VantageLicense.GateDone = nil
     end)
 
     done.Event:Wait()
@@ -3376,35 +3394,35 @@ function VantageRuntime.License.ShowGate(initialMessage)
 end
 
 -- Watch KEY / NO-KEY mode continuously in both directions.
-VantageRuntime.License.StartModeWatch()
+VantageLicense.StartModeWatch()
 
-if VantageRuntime.License.IsKeyRequired() then
-    local savedKey = VantageRuntime.License.LoadKey()
+if VantageLicense.IsKeyRequired() then
+    local savedKey = VantageLicense.LoadKey()
     local autoGranted = false
 
     if savedKey then
-        local ok, result, status = VantageRuntime.License.Validate(savedKey)
+        local ok, result, status = VantageLicense.Validate(savedKey)
         if ok then
             autoGranted = true
-            VantageRuntime.License.StartHeartbeat()
+            VantageLicense.StartHeartbeat()
         elseif status == 401 or status == 403 or status == 404 then
-            VantageRuntime.License.ClearSavedKey()
+            VantageLicense.ClearSavedKey()
         end
     end
 
     if not autoGranted then
-        VantageRuntime.License.ShowGate()
+        VantageLicense.ShowGate()
     end
 else
-    VantageRuntime.License.Key = nil
-    VantageRuntime.License.Plan = "NO KEY MODE"
-    VantageRuntime.License.ExpiresAt = nil
+    VantageLicense.Key = nil
+    VantageLicense.Plan = "NO KEY MODE"
+    VantageLicense.ExpiresAt = nil
 end
 
 pcall(function()
-    VantageRuntime.Logger.Send(
+    VantageLogger.Send(
         "بدأت الجلسة",
-        "تم تشغيل VANTAGE وتفعيل تسجيل النشاط.\nاللعبة: **" .. VantageRuntime.Logger.GetGameName() .. "**\nعدد اللاعبين: **" .. VantageRuntime.Logger.GetPlayerCount() .. "**",
+        "تم تشغيل VANTAGE وتفعيل تسجيل النشاط.\nاللعبة: **" .. VantageLogger.GetGameName() .. "**\nعدد اللاعبين: **" .. VantageLogger.GetPlayerCount() .. "**",
         "SESSION"
     )
 end)
@@ -3513,14 +3531,14 @@ local Brand = Text(Header, "VANTAGE", UDim2.new(0, 210, 0, 24), UDim2.new(0, 70,
 
 local ExpiryLabel = Text(Header, "", UDim2.new(0, 150, 0, 30), UDim2.new(1, -240, 0, 20), Enum.Font.GothamBold, 10, T.BlueSoft, Enum.TextXAlignment.Right)
 ExpiryLabel.Name = "LicenseCountdown"
-VantageRuntime.License.ExpiryLabel = ExpiryLabel
-VantageRuntime.License.UpdateExpiryLabel()
+VantageLicense.ExpiryLabel = ExpiryLabel
+VantageLicense.UpdateExpiryLabel()
 
 task.spawn(function()
     while ScreenGui and ScreenGui.Parent do
-        VantageRuntime.License.UpdateExpiryLabel()
-        if VantageRuntime.License.Key and VantageRuntime.License.ExpiresAt and os.time() >= VantageRuntime.License.ExpiresAt then
-            VantageRuntime.License.HandleLicenseEnded("This VANTAGE key has expired. Enter another active key.")
+        VantageLicense.UpdateExpiryLabel()
+        if VantageLicense.Key and VantageLicense.ExpiresAt and os.time() >= VantageLicense.ExpiresAt then
+            VantageLicense.HandleLicenseEnded("This VANTAGE key has expired. Enter another active key.")
         end
         task.wait(1)
     end
@@ -3594,23 +3612,23 @@ local function ActionButton(name, x, y, w, h, icon, title, desc, accent)
     return btn
 end
 
-VantageRuntime.RecordBtn = ActionButton("RecordButton", 0, 28, 296, 76, "●", "START RECORDING", "Capture and save movement", T.BlueSoft)
-VantageRuntime.LoopBtn = ActionButton("LoopButton", 306, 28, 296, 76, "↻", "LOOP PLAYBACK", "Repeat selected recording", T.Blue)
-VantageRuntime.StopBtn = ActionButton("StopButton", 0, 114, 296, 76, "■", "STOP PLAYBACK", "Stop active playback", T.Red)
-VantageRuntime.ListBtn = ActionButton("LibraryButton", 306, 114, 296, 76, "≡", "RECORDINGS", "Open recording library", Color3.fromRGB(91, 137, 184))
+RecordBtn = ActionButton("RecordButton", 0, 28, 296, 76, "●", "START RECORDING", "Capture and save movement", T.BlueSoft)
+LoopBtn = ActionButton("LoopButton", 306, 28, 296, 76, "↻", "LOOP PLAYBACK", "Repeat selected recording", T.Blue)
+StopBtn = ActionButton("StopButton", 0, 114, 296, 76, "■", "STOP PLAYBACK", "Stop active playback", T.Red)
+ListBtn = ActionButton("LibraryButton", 306, 114, 296, 76, "≡", "RECORDINGS", "Open recording library", Color3.fromRGB(91, 137, 184))
 
-VantageRuntime.LocationsBtn = ActionButton("LocationsButton", 0, 200, 296, 64, "◆", "LOCATIONS", "F10 save • teleport • loop", Color3.fromRGB(78, 132, 185))
-VantageRuntime.MovementBtn = ActionButton("MovementButton", 306, 200, 296, 64, "»", "MOVEMENT", "Speed • anti-fall • auto return", Color3.fromRGB(128, 83, 214))
+LocationsBtn = ActionButton("LocationsButton", 0, 200, 296, 64, "◆", "LOCATIONS", "F10 save • teleport • loop", Color3.fromRGB(78, 132, 185))
+MovementBtn = ActionButton("MovementButton", 306, 200, 296, 64, "»", "MOVEMENT", "Speed • anti-fall • auto return", Color3.fromRGB(128, 83, 214))
 
-VantageRuntime.PlayersBtn = ActionButton("PlayersButton", 0, 274, 194, 64, "◎", "PLAYER LIST", "Players and spectate", Color3.fromRGB(117, 76, 198))
-VantageRuntime.ESPMainBtn = ActionButton("ESPButton", 204, 274, 194, 64, "◇", "ESP: OFF", "Wall skeleton ESP", Color3.fromRGB(166, 105, 255))
-VantageRuntime.ESPColorBtn = ActionButton("ESPColorButton", 408, 274, 194, 64, "◈", "ESP COLOR", "Choose custom RGB", espColor)
+PlayersBtn = ActionButton("PlayersButton", 0, 274, 194, 64, "◎", "PLAYER LIST", "Players and spectate", Color3.fromRGB(117, 76, 198))
+ESPMainBtn = ActionButton("ESPButton", 204, 274, 194, 64, "◇", "ESP: OFF", "Wall skeleton ESP", Color3.fromRGB(166, 105, 255))
+ESPColorBtn = ActionButton("ESPColorButton", 408, 274, 194, 64, "◈", "ESP COLOR", "Choose custom RGB", espColor)
 
-VantageRuntime.ProfilesBtn = ActionButton("ProfilesButton", 0, 348, 602, 54, "▣", "PROFILES", "Save and restore your VANTAGE setup", Color3.fromRGB(137, 91, 218))
+ProfilesBtn = ActionButton("ProfilesButton", 0, 348, 602, 54, "▣", "PROFILES", "Save and restore your VANTAGE setup", Color3.fromRGB(137, 91, 218))
 
 -- INFO category card: official VANTAGE Discord invite.
-VantageRuntime.InfoBtn = ActionButton("InfoButton", 0, 412, 602, 64, "i", "DISCORD SERVER", "https://discord.gg/szsxhYKrxG", Color3.fromRGB(176, 104, 255))
-VantageRuntime.InfoBtn.MouseButton1Click:Connect(function()
+InfoBtn = ActionButton("InfoButton", 0, 412, 602, 64, "i", "DISCORD SERVER", "https://discord.gg/szsxhYKrxG", Color3.fromRGB(176, 104, 255))
+InfoBtn.MouseButton1Click:Connect(function()
     local copied = false
     if type(setclipboard) == "function" then
         copied = pcall(setclipboard, "https://discord.gg/szsxhYKrxG")
@@ -3619,7 +3637,7 @@ VantageRuntime.InfoBtn.MouseButton1Click:Connect(function()
     end
 
     local labels = {}
-    for _, child in ipairs(VantageRuntime.InfoBtn:GetChildren()) do
+    for _, child in ipairs(InfoBtn:GetChildren()) do
         if child:IsA("TextLabel") then
             table.insert(labels, child)
         end
@@ -3638,23 +3656,23 @@ VantageRuntime.InfoBtn.MouseButton1Click:Connect(function()
 end)
 
 -- Wide exit row
-VantageRuntime.CloseBtn = Instance.new("TextButton")
-VantageRuntime.CloseBtn.Name = "ExitButton"
-VantageRuntime.CloseBtn.Size = UDim2.new(0, 602, 0, 46)
-VantageRuntime.CloseBtn.Position = UDim2.new(0, 0, 0, 412)
-VantageRuntime.CloseBtn.BackgroundColor3 = Color3.fromRGB(9, 17, 29)
-VantageRuntime.CloseBtn.BorderSizePixel = 0
-VantageRuntime.CloseBtn.Text = ""
-VantageRuntime.CloseBtn.AutoButtonColor = false
-VantageRuntime.CloseBtn.Parent = Content
-Corner(VantageRuntime.CloseBtn, 12)
-Stroke(VantageRuntime.CloseBtn, Color3.fromRGB(41, 60, 83), 0.18)
-Hover(VantageRuntime.CloseBtn, Color3.fromRGB(9, 17, 29), Color3.fromRGB(14, 25, 41))
+CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "ExitButton"
+CloseBtn.Size = UDim2.new(0, 602, 0, 46)
+CloseBtn.Position = UDim2.new(0, 0, 0, 412)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(9, 17, 29)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = ""
+CloseBtn.AutoButtonColor = false
+CloseBtn.Parent = Content
+Corner(CloseBtn, 12)
+Stroke(CloseBtn, Color3.fromRGB(41, 60, 83), 0.18)
+Hover(CloseBtn, Color3.fromRGB(9, 17, 29), Color3.fromRGB(14, 25, 41))
 
-local ExitIcon = Text(VantageRuntime.CloseBtn, "×", UDim2.new(0, 40, 1, 0), UDim2.new(0, 14, 0, 0), Enum.Font.GothamBold, 19, Color3.fromRGB(144, 159, 178), Enum.TextXAlignment.Center)
-Text(VantageRuntime.CloseBtn, "EXIT RECORDER", UDim2.new(0, 180, 0, 22), UDim2.new(0, 62, 0, 9), Enum.Font.GothamBold, 12, T.Text)
-Text(VantageRuntime.CloseBtn, "Close interface and stop all processes", UDim2.new(0, 300, 0, 18), UDim2.new(0, 62, 0, 30), Enum.Font.Gotham, 9, T.Muted)
-Text(VantageRuntime.CloseBtn, "›", UDim2.new(0, 30, 1, 0), UDim2.new(1, -42, 0, 0), Enum.Font.GothamBold, 20, T.Muted, Enum.TextXAlignment.Center)
+local ExitIcon = Text(CloseBtn, "×", UDim2.new(0, 40, 1, 0), UDim2.new(0, 14, 0, 0), Enum.Font.GothamBold, 19, Color3.fromRGB(144, 159, 178), Enum.TextXAlignment.Center)
+Text(CloseBtn, "EXIT RECORDER", UDim2.new(0, 180, 0, 22), UDim2.new(0, 62, 0, 9), Enum.Font.GothamBold, 12, T.Text)
+Text(CloseBtn, "Close interface and stop all processes", UDim2.new(0, 300, 0, 18), UDim2.new(0, 62, 0, 30), Enum.Font.Gotham, 9, T.Muted)
+Text(CloseBtn, "›", UDim2.new(0, 30, 1, 0), UDim2.new(1, -42, 0, 0), Enum.Font.GothamBold, 20, T.Muted, Enum.TextXAlignment.Center)
 
 -- Bottom status bar
 local Footer = Instance.new("Frame")
@@ -3836,7 +3854,7 @@ local paletteColors = {
 local selectedESPColorButton = nil
 
 local function UpdateESPColorButtonAccent()
-    for _, obj in ipairs(VantageRuntime.ESPColorBtn:GetDescendants()) do
+    for _, obj in ipairs(ESPColorBtn:GetDescendants()) do
         if obj:IsA("TextLabel") and obj.Text == "◈" then
             obj.TextColor3 = espColor
         end
@@ -4470,25 +4488,25 @@ Corner(MovementClose, 8)
 Text(MovementFrame, "WALK SPEED", UDim2.new(0, 150, 0, 20), UDim2.new(0, 18, 0, 78), Enum.Font.GothamBold, 10, T.Muted)
 local SpeedValue = Text(MovementFrame, tostring(walkSpeedValue), UDim2.new(0, 80, 0, 24), UDim2.new(1, -98, 0, 74), Enum.Font.GothamBold, 15, T.BlueSoft, Enum.TextXAlignment.Right)
 
-VantageRuntime.SpeedToggleButton = Instance.new("TextButton")
-VantageRuntime.SpeedToggleButton.Name = "VantageSpeedToggle"
-VantageRuntime.SpeedToggleButton.Size = UDim2.new(0, 104, 0, 26)
-VantageRuntime.SpeedToggleButton.Position = UDim2.new(0, 205, 0, 72)
-VantageRuntime.SpeedToggleButton.BackgroundColor3 = T.Navy
-VantageRuntime.SpeedToggleButton.BorderSizePixel = 0
-VantageRuntime.SpeedToggleButton.Text = "SPEED: OFF"
-VantageRuntime.SpeedToggleButton.TextColor3 = T.Muted
-VantageRuntime.SpeedToggleButton.TextSize = 9
-VantageRuntime.SpeedToggleButton.Font = Enum.Font.GothamBold
-VantageRuntime.SpeedToggleButton.Parent = MovementFrame
-Corner(VantageRuntime.SpeedToggleButton, 7)
-Stroke(VantageRuntime.SpeedToggleButton, T.Border, 0.2)
+VantageSpeedToggleButton = Instance.new("TextButton")
+VantageSpeedToggleButton.Name = "VantageSpeedToggle"
+VantageSpeedToggleButton.Size = UDim2.new(0, 104, 0, 26)
+VantageSpeedToggleButton.Position = UDim2.new(0, 205, 0, 72)
+VantageSpeedToggleButton.BackgroundColor3 = T.Navy
+VantageSpeedToggleButton.BorderSizePixel = 0
+VantageSpeedToggleButton.Text = "SPEED: OFF"
+VantageSpeedToggleButton.TextColor3 = T.Muted
+VantageSpeedToggleButton.TextSize = 9
+VantageSpeedToggleButton.Font = Enum.Font.GothamBold
+VantageSpeedToggleButton.Parent = MovementFrame
+Corner(VantageSpeedToggleButton, 7)
+Stroke(VantageSpeedToggleButton, T.Border, 0.2)
 
-VantageRuntime.SpeedToggleButton.MouseButton1Click:Connect(function()
+VantageSpeedToggleButton.MouseButton1Click:Connect(function()
     StartSpeedBoost()
-    VantageRuntime.SpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
-    VantageRuntime.SpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
-    VantageRuntime.Logger.Send("تغيير سرعة الحركة", "الحالة: **" .. (speedBoostConnection and "مفعلة" or "متوقفة") .. "**\\nالقيمة: **" .. tostring(walkSpeedValue) .. "**", "MOVEMENT")
+    VantageSpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
+    VantageSpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
+    VantageLogger.Send("تغيير سرعة الحركة", "الحالة: **" .. (speedBoostConnection and "مفعلة" or "متوقفة") .. "**\\nالقيمة: **" .. tostring(walkSpeedValue) .. "**", "MOVEMENT")
 end)
 
 local function MovementSlider(y, minValue, maxValue, initialValue, onChanged)
@@ -4686,13 +4704,13 @@ local MonsterTargetStatus = Text(
 )
 
 MonsterSafeBtn.MouseButton1Click:Connect(function()
-    VantageRuntime.MonsterSafe.SetEnabled(not VantageRuntime.MonsterSafe.Enabled)
-    MonsterSafeBtn.Text = VantageRuntime.MonsterSafe.Enabled and "MONSTER SAFE: ON" or "MONSTER SAFE: OFF"
-    MonsterSafeBtn.TextColor3 = VantageRuntime.MonsterSafe.Enabled and T.Green or T.Muted
+    VantageMonsterSafe.SetEnabled(not VantageMonsterSafe.Enabled)
+    MonsterSafeBtn.Text = VantageMonsterSafe.Enabled and "MONSTER SAFE: ON" or "MONSTER SAFE: OFF"
+    MonsterSafeBtn.TextColor3 = VantageMonsterSafe.Enabled and T.Green or T.Muted
 end)
 
 MonsterTargetBtn.MouseButton1Click:Connect(function()
-    local target = VantageRuntime.MonsterSafe.GetManualTargetFromMouse()
+    local target = VantageMonsterSafe.GetManualTargetFromMouse()
 
     if not target then
         MonsterTargetStatus.Text = "No valid monster/object under mouse."
@@ -4700,14 +4718,14 @@ MonsterTargetBtn.MouseButton1Click:Connect(function()
         return
     end
 
-    local ok = VantageRuntime.MonsterSafe.AddManualTarget(target)
+    local ok = VantageMonsterSafe.AddManualTarget(target)
 
     if ok then
         MonsterTargetStatus.Text = "Target added: " .. tostring(target.Name)
         MonsterTargetStatus.TextColor3 = T.Green
 
-        if VantageRuntime.MonsterSafe.Enabled then
-            VantageRuntime.MonsterSafe.ApplyManualTargets()
+        if VantageMonsterSafe.Enabled then
+            VantageMonsterSafe.ApplyManualTargets()
         end
     else
         MonsterTargetStatus.Text = "Could not add this target."
@@ -5298,7 +5316,7 @@ function UpdateList()
             speedToggleBtn.TextColor3 = data.PlaybackSpeedEnabled and Color3.fromRGB(185, 255, 205) or Color3.fromRGB(180, 180, 195)
 
             SaveRecordingToFile(name, data)
-            VantageRuntime.Logger.Send("تبديل سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالحالة: **" .. (data.PlaybackSpeedEnabled and "مفعلة" or "متوقفة") .. "**\\nالسرعة المختارة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+            VantageLogger.Send("تبديل سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالحالة: **" .. (data.PlaybackSpeedEnabled and "مفعلة" or "متوقفة") .. "**\\nالسرعة المختارة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
         end)
 
         speedMinusBtn.MouseButton1Click:Connect(function()
@@ -5307,7 +5325,7 @@ function UpdateList()
             data.PlaybackSpeed = math.clamp(currentSpeed - step, 0.10, 20)
             speedValueBtn.Text = string.format("%.2fx", data.PlaybackSpeed)
             SaveRecordingToFile(name, data)
-            VantageRuntime.Logger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+            VantageLogger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
         end)
 
         speedPlusBtn.MouseButton1Click:Connect(function()
@@ -5316,7 +5334,7 @@ function UpdateList()
             data.PlaybackSpeed = math.clamp(currentSpeed + step, 0.10, 20)
             speedValueBtn.Text = string.format("%.2fx", data.PlaybackSpeed)
             SaveRecordingToFile(name, data)
-            VantageRuntime.Logger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
+            VantageLogger.Send("تم تغيير سرعة التسجيل", "التسجيل: **" .. tostring(name) .. "**\\nالسرعة: **" .. tostring(data.PlaybackSpeed) .. "x**", "RECORD_SPEED")
         end)
 
         playBtn.MouseButton1Click:Connect(function()
@@ -5394,7 +5412,7 @@ end)
 
 -- ============================================
 
-VantageRuntime.RecordBtn.MouseButton1Click:Connect(function()
+RecordBtn.MouseButton1Click:Connect(function()
 
     if recording then
 
@@ -5408,17 +5426,17 @@ VantageRuntime.RecordBtn.MouseButton1Click:Connect(function()
 
 end)
 
-VantageRuntime.LoopBtn.MouseButton1Click:Connect(function()
+LoopBtn.MouseButton1Click:Connect(function()
 
     if loopPlaying then
 
         loopPlaying = false
 
-        VantageRuntime.LoopBtn.Text = "↻ LOOP PLAYBACK"
+        LoopBtn.Text = "↻ LOOP PLAYBACK"
 
-        VantageRuntime.LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(7, 14, 25)
 
-        VantageRuntime.LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
+        LoopBtn.BorderColor3 = Color3.fromRGB(62, 142, 230)
 
         print("⏹️ تم إيقاف الLOOP")
 
@@ -5434,13 +5452,13 @@ VantageRuntime.LoopBtn.MouseButton1Click:Connect(function()
 
 end)
 
-VantageRuntime.StopBtn.MouseButton1Click:Connect(function()
+StopBtn.MouseButton1Click:Connect(function()
 
     StopAllPlayback()
 
 end)
 
-VantageRuntime.ListBtn.MouseButton1Click:Connect(function()
+ListBtn.MouseButton1Click:Connect(function()
 
     UpdateList()
 
@@ -5448,40 +5466,40 @@ VantageRuntime.ListBtn.MouseButton1Click:Connect(function()
 
 end)
 
-VantageRuntime.LocationsBtn.MouseButton1Click:Connect(function()
+LocationsBtn.MouseButton1Click:Connect(function()
     UpdateLocationsList()
     MenuOpen = false
     MainMenu.Visible = false
     LocationsFrame.Visible = true
 end)
 
-VantageRuntime.MovementBtn.MouseButton1Click:Connect(function()
+MovementBtn.MouseButton1Click:Connect(function()
     MenuOpen = false
     MainMenu.Visible = false
     SpeedValue.Text = tostring(walkSpeedValue)
     FlySpeedText.Text = tostring(flySpeed)
     SetWalkSliderVisual(walkSpeedValue)
     SetFlySliderVisual(flySpeed)
-    VantageRuntime.SpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
-    VantageRuntime.SpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
+    VantageSpeedToggleButton.Text = speedBoostConnection and "SPEED: ON" or "SPEED: OFF"
+    VantageSpeedToggleButton.TextColor3 = speedBoostConnection and T.Green or T.Muted
     MovementFrame.Visible = true
 end)
 
-VantageRuntime.ProfilesBtn.MouseButton1Click:Connect(function()
+ProfilesBtn.MouseButton1Click:Connect(function()
     UpdateProfilesList()
     MenuOpen = false
     MainMenu.Visible = false
     ProfilesFrame.Visible = true
 end)
 
-VantageRuntime.PlayersBtn.MouseButton1Click:Connect(function()
+PlayersBtn.MouseButton1Click:Connect(function()
     UpdatePlayerList()
     MenuOpen = false
     MainMenu.Visible = false
     PlayersFrame.Visible = true
 end)
 
-VantageRuntime.ESPMainBtn.MouseButton1Click:Connect(function()
+ESPMainBtn.MouseButton1Click:Connect(function()
     local targetState = not espEnabled
 
     local ok, err = pcall(function()
@@ -5493,7 +5511,7 @@ VantageRuntime.ESPMainBtn.MouseButton1Click:Connect(function()
         warn("VANTAGE ESP ERROR: " .. tostring(err))
     end
 
-    local labels = VantageRuntime.ESPMainBtn:GetChildren()
+    local labels = ESPMainBtn:GetChildren()
 
     for _, obj in ipairs(labels) do
         if obj:IsA("TextLabel") and (obj.Text == "ESP: OFF" or obj.Text == "ESP: ON") then
@@ -5501,14 +5519,14 @@ VantageRuntime.ESPMainBtn.MouseButton1Click:Connect(function()
             obj.TextColor3 = espEnabled and T.Green or T.Text
         end
     end
-    VantageRuntime.Logger.Send("تغيير حالة ESP", "الحالة: **" .. (espEnabled and "مفعلة" or "متوقفة") .. "**", "ESP")
+    VantageLogger.Send("تغيير حالة ESP", "الحالة: **" .. (espEnabled and "مفعلة" or "متوقفة") .. "**", "ESP")
 end)
 
-VantageRuntime.ESPColorBtn.MouseButton1Click:Connect(function()
+ESPColorBtn.MouseButton1Click:Connect(function()
     OpenESPColorPicker()
 end)
 
-VantageRuntime.CloseBtn.MouseButton1Click:Connect(function()
+CloseBtn.MouseButton1Click:Connect(function()
 
     recording = false
 
@@ -5519,10 +5537,10 @@ VantageRuntime.CloseBtn.MouseButton1Click:Connect(function()
     StopAntiFall()
     StopSpeedBoost()
     StopFly()
-    VantageRuntime.MonsterSafe.SetEnabled(false)
-    if VantageRuntime.MonsterSafe.Connection then
-        VantageRuntime.MonsterSafe.Connection:Disconnect()
-        VantageRuntime.MonsterSafe.Connection = nil
+    VantageMonsterSafe.SetEnabled(false)
+    if VantageMonsterSafe.Connection then
+        VantageMonsterSafe.Connection:Disconnect()
+        VantageMonsterSafe.Connection = nil
     end
     StopSpectate()
 
@@ -5538,7 +5556,7 @@ VantageRuntime.CloseBtn.MouseButton1Click:Connect(function()
 
     CloseESPColorPicker()
     StopPerformanceHUD()
-    VantageRuntime.Logger.SessionSummary("زر الخروج من VANTAGE")
+    VantageLogger.SessionSummary("زر الخروج من VANTAGE")
     task.wait(0.15)
     ScreenGui:Destroy()
 
@@ -5664,12 +5682,12 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     -- Preserve the working UI; only reposition existing cards after creation.
     MainMenu.Size = UDim2.new(0, 650, 0, 700)
 
-    if VantageRuntime.ProfilesBtn and VantageRuntime.ProfilesBtn.Parent then
-        VantageRuntime.ProfilesBtn.Position = UDim2.new(0, 0, 0, 412)
+    if ProfilesBtn and ProfilesBtn.Parent then
+        ProfilesBtn.Position = UDim2.new(0, 0, 0, 412)
     end
 
-    if VantageRuntime.CloseBtn and VantageRuntime.CloseBtn.Parent then
-        VantageRuntime.CloseBtn.Position = UDim2.new(0, 0, 0, 476)
+    if CloseBtn and CloseBtn.Parent then
+        CloseBtn.Position = UDim2.new(0, 0, 0, 476)
     end
 
     local AimBtn = ActionButton(
@@ -5804,8 +5822,8 @@ local AimModuleLoaded, AimModuleError = pcall(function()
         end
 
         -- Bots / NPCs already detected by VantageBotRadar
-        if VantageRuntime.BotRadar and VantageRuntime.BotRadar.Objects then
-            for model, data in pairs(VantageRuntime.BotRadar.Objects) do
+        if VantageBotRadar and VantageBotRadar.Objects then
+            for model, data in pairs(VantageBotRadar.Objects) do
                 if model
                     and model.Parent
                     and data
@@ -5831,8 +5849,8 @@ local AimModuleLoaded, AimModuleError = pcall(function()
     end
 
     local function AcquireTarget()
-        if espEnabled and VantageRuntime.BotRadar and VantageRuntime.BotRadar.Reconcile then
-            pcall(VantageRuntime.BotRadar.Reconcile)
+        if espEnabled and VantageBotRadar and VantageBotRadar.Reconcile then
+            pcall(VantageBotRadar.Reconcile)
         end
 
         lockedTarget = FindClosestTarget()
@@ -6298,10 +6316,10 @@ task.defer(function()
         local aimSettingsBtn = Content and Content:FindFirstChild("AimSettingsButton")
 
         local allCards = {
-            VantageRuntime.RecordBtn, VantageRuntime.LoopBtn, VantageRuntime.StopBtn, VantageRuntime.ListBtn,
-            VantageRuntime.LocationsBtn, VantageRuntime.MovementBtn, VantageRuntime.PlayersBtn,
-            VantageRuntime.ESPMainBtn, VantageRuntime.ESPColorBtn, VantageRuntime.ProfilesBtn,
-            aimBtn, aimSettingsBtn, VantageRuntime.InfoBtn
+            RecordBtn, LoopBtn, StopBtn, ListBtn,
+            LocationsBtn, MovementBtn, PlayersBtn,
+            ESPMainBtn, ESPColorBtn, ProfilesBtn,
+            aimBtn, aimSettingsBtn, InfoBtn
         }
 
         -- Restyle action cards so the shapes fit Style 4 better.
@@ -6337,14 +6355,14 @@ task.defer(function()
         end
 
         local categories = {
-            {Name="RECORDER", Icon="●", Items={VantageRuntime.RecordBtn, VantageRuntime.LoopBtn, VantageRuntime.StopBtn, VantageRuntime.ListBtn}},
-            {Name="LOCATIONS", Icon="◆", Items={VantageRuntime.LocationsBtn}},
-            {Name="MOVEMENT", Icon="»", Items={VantageRuntime.MovementBtn}},
-            {Name="PLAYERS", Icon="◎", Items={VantageRuntime.PlayersBtn}},
-            {Name="ESP", Icon="◇", Items={VantageRuntime.ESPMainBtn, VantageRuntime.ESPColorBtn}},
+            {Name="RECORDER", Icon="●", Items={RecordBtn, LoopBtn, StopBtn, ListBtn}},
+            {Name="LOCATIONS", Icon="◆", Items={LocationsBtn}},
+            {Name="MOVEMENT", Icon="»", Items={MovementBtn}},
+            {Name="PLAYERS", Icon="◎", Items={PlayersBtn}},
+            {Name="ESP", Icon="◇", Items={ESPMainBtn, ESPColorBtn}},
             {Name="AIM", Icon="⊙", Items={aimBtn, aimSettingsBtn}},
-            {Name="PROFILES", Icon="▣", Items={VantageRuntime.ProfilesBtn}},
-            {Name="INFO", Icon="i", Items={VantageRuntime.InfoBtn}},
+            {Name="PROFILES", Icon="▣", Items={ProfilesBtn}},
+            {Name="INFO", Icon="i", Items={InfoBtn}},
         }
 
         local navButtons = {}
@@ -6435,12 +6453,12 @@ task.defer(function()
         end
 
         -- Exit stays available on every category.
-        if VantageRuntime.CloseBtn and VantageRuntime.CloseBtn.Parent then
-            VantageRuntime.CloseBtn.Visible = true
-            VantageRuntime.CloseBtn.Position = UDim2.new(0,0,0,420)
-            VantageRuntime.CloseBtn.Size = UDim2.new(0,570,0,48)
-            VantageRuntime.CloseBtn.BackgroundColor3 = Color3.fromRGB(9, 11, 20)
-            Corner(VantageRuntime.CloseBtn, 14)
+        if CloseBtn and CloseBtn.Parent then
+            CloseBtn.Visible = true
+            CloseBtn.Position = UDim2.new(0,0,0,420)
+            CloseBtn.Size = UDim2.new(0,570,0,48)
+            CloseBtn.BackgroundColor3 = Color3.fromRGB(9, 11, 20)
+            Corner(CloseBtn, 14)
         end
 
         -- Recorder is the first page on startup.
@@ -6448,7 +6466,7 @@ task.defer(function()
 
         -- Only reveal the menu AFTER Style 4 is completely built.
         -- This is the important part that stops the old shell appearing first.
-        if ScreenGui and ScreenGui.Parent and not VantageRuntime.License.GateOpen then
+        if ScreenGui and ScreenGui.Parent and not VantageLicense.GateOpen then
             ScreenGui.Enabled = true
             MainMenu.Visible = true
             MenuOpen = true
@@ -6460,7 +6478,7 @@ task.defer(function()
 
         -- Safe fallback: if Style 4 itself fails, reveal the base menu instead of leaving nothing visible.
         pcall(function()
-            if ScreenGui and ScreenGui.Parent and not VantageRuntime.License.GateOpen then
+            if ScreenGui and ScreenGui.Parent and not VantageLicense.GateOpen then
                 ScreenGui.Enabled = true
                 if MainMenu and MainMenu.Parent then
                     MainMenu.Visible = true
