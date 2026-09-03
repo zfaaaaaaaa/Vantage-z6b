@@ -141,6 +141,98 @@ VantageMonsterSafe = VantageMonsterSafe or {
 VantageMonsterSafe.DisabledModels = VantageMonsterSafe.DisabledModels or {}
 VantageMonsterSafe.ManualTargets = VantageMonsterSafe.ManualTargets or {}
 
+VantageGhost = VantageGhost or {
+    Invisible = false,
+    Noclip = false,
+    Connection = nil,
+    OriginalTransparency = {},
+    OriginalCollision = {},
+}
+
+function VantageGhost.ApplyInvisible(enabled)
+    VantageGhost.Invisible = enabled == true
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    for _, obj in ipairs(char:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if VantageGhost.OriginalTransparency[obj] == nil then
+                VantageGhost.OriginalTransparency[obj] = obj.LocalTransparencyModifier
+            end
+            obj.LocalTransparencyModifier = VantageGhost.Invisible and 1 or (VantageGhost.OriginalTransparency[obj] or 0)
+            if not VantageGhost.Invisible then
+                VantageGhost.OriginalTransparency[obj] = nil
+            end
+        end
+    end
+end
+
+function VantageGhost.StopNoclip()
+    if VantageGhost.Connection then
+        VantageGhost.Connection:Disconnect()
+        VantageGhost.Connection = nil
+    end
+
+    local char = LocalPlayer.Character
+    if char then
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local old = VantageGhost.OriginalCollision[obj]
+                if old ~= nil then
+                    obj.CanCollide = old
+                    VantageGhost.OriginalCollision[obj] = nil
+                end
+            end
+        end
+    end
+end
+
+function VantageGhost.ApplyNoclip(enabled)
+    VantageGhost.Noclip = enabled == true
+
+    if not VantageGhost.Noclip then
+        VantageGhost.StopNoclip()
+        return
+    end
+
+    if VantageGhost.Connection then
+        VantageGhost.Connection:Disconnect()
+    end
+
+    VantageGhost.Connection = RunService.Stepped:Connect(function()
+        if not VantageGhost.Noclip then
+            VantageGhost.StopNoclip()
+            return
+        end
+
+        local char = LocalPlayer.Character
+        if not char then return end
+
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                if VantageGhost.OriginalCollision[obj] == nil then
+                    VantageGhost.OriginalCollision[obj] = obj.CanCollide
+                end
+                obj.CanCollide = false
+            end
+        end
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.35)
+    VantageGhost.OriginalTransparency = {}
+    VantageGhost.OriginalCollision = {}
+
+    if VantageGhost.Invisible then
+        VantageGhost.ApplyInvisible(true)
+    end
+    if VantageGhost.Noclip then
+        VantageGhost.ApplyNoclip(true)
+    end
+end)
+
 
 local savedLocations = {}
 local loopTeleporting = false
@@ -4561,7 +4653,7 @@ end)
 
 local MovementFrame = Instance.new("Frame")
 MovementFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MovementFrame.Size = UDim2.new(0, 430, 0, 510)
+MovementFrame.Size = UDim2.new(0, 430, 0, 620)
 MovementFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MovementFrame.BackgroundColor3 = T.Black
 MovementFrame.BorderSizePixel = 0
@@ -4768,9 +4860,47 @@ end)
 
 Text(MovementFrame, "WASD = move   SPACE = up   LEFT CTRL = down", UDim2.new(1, -36, 0, 18), UDim2.new(0, 18, 0, 354), Enum.Font.Gotham, 9, T.Muted)
 
+VantageInvisibleBtn = Instance.new("TextButton")
+VantageInvisibleBtn.Size = UDim2.new(0, 170, 0, 42)
+VantageInvisibleBtn.Position = UDim2.new(0, 18, 0, 390)
+VantageInvisibleBtn.BackgroundColor3 = T.Navy
+VantageInvisibleBtn.BorderSizePixel = 0
+VantageInvisibleBtn.Text = "INVISIBLE: OFF"
+VantageInvisibleBtn.TextColor3 = T.Muted
+VantageInvisibleBtn.TextSize = 10
+VantageInvisibleBtn.Font = Enum.Font.GothamBold
+VantageInvisibleBtn.Parent = MovementFrame
+Corner(VantageInvisibleBtn, 9)
+Stroke(VantageInvisibleBtn, T.Border, 0.2)
+
+VantageNoclipBtn = Instance.new("TextButton")
+VantageNoclipBtn.Size = UDim2.new(0, 170, 0, 42)
+VantageNoclipBtn.Position = UDim2.new(0, 200, 0, 390)
+VantageNoclipBtn.BackgroundColor3 = T.Navy
+VantageNoclipBtn.BorderSizePixel = 0
+VantageNoclipBtn.Text = "NO COLLISION: OFF"
+VantageNoclipBtn.TextColor3 = T.Muted
+VantageNoclipBtn.TextSize = 10
+VantageNoclipBtn.Font = Enum.Font.GothamBold
+VantageNoclipBtn.Parent = MovementFrame
+Corner(VantageNoclipBtn, 9)
+Stroke(VantageNoclipBtn, T.Border, 0.2)
+
+VantageInvisibleBtn.MouseButton1Click:Connect(function()
+    VantageGhost.ApplyInvisible(not VantageGhost.Invisible)
+    VantageInvisibleBtn.Text = VantageGhost.Invisible and "INVISIBLE: ON" or "INVISIBLE: OFF"
+    VantageInvisibleBtn.TextColor3 = VantageGhost.Invisible and T.Green or T.Muted
+end)
+
+VantageNoclipBtn.MouseButton1Click:Connect(function()
+    VantageGhost.ApplyNoclip(not VantageGhost.Noclip)
+    VantageNoclipBtn.Text = VantageGhost.Noclip and "NO COLLISION: ON" or "NO COLLISION: OFF"
+    VantageNoclipBtn.TextColor3 = VantageGhost.Noclip and T.Green or T.Muted
+end)
+
 local MonsterSafeBtn = Instance.new("TextButton")
 MonsterSafeBtn.Size = UDim2.new(0, 190, 0, 42)
-MonsterSafeBtn.Position = UDim2.new(0, 18, 0, 386)
+MonsterSafeBtn.Position = UDim2.new(0, 18, 0, 454)
 MonsterSafeBtn.BackgroundColor3 = T.Navy
 MonsterSafeBtn.BorderSizePixel = 0
 MonsterSafeBtn.Text = "MONSTER SAFE: OFF"
@@ -4783,7 +4913,7 @@ Stroke(MonsterSafeBtn, T.Border, 0.2)
 
 local MonsterTargetBtn = Instance.new("TextButton")
 MonsterTargetBtn.Size = UDim2.new(0, 190, 0, 42)
-MonsterTargetBtn.Position = UDim2.new(0, 222, 0, 386)
+MonsterTargetBtn.Position = UDim2.new(0, 222, 0, 454)
 MonsterTargetBtn.BackgroundColor3 = T.Navy
 MonsterTargetBtn.BorderSizePixel = 0
 MonsterTargetBtn.Text = "ADD LOOK TARGET"
